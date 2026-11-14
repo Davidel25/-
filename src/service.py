@@ -22,6 +22,7 @@ from src.risk.evaluation import PositionReport, Status, enrich_positions, evalua
 from src.risk.manager import ExitAction, RiskLimits, RiskManager, pair_legs
 from src.risk.portfolio import PortfolioSnapshot, build_snapshot, signal_dollar_delta
 from src.risk.report import load_entry_deltas
+from src.risk.scenarios import run_presets
 from src.storage.trade_log import TradeLog
 from src.strategies.credit_spreads import ScannerConfig, rank_key, scan_all, schedule_gate, underlying_gate
 
@@ -37,6 +38,7 @@ class AppState:
     positions: list[dict] = field(default_factory=list)
     alerts: list[dict] = field(default_factory=list)   # flattened per-position alerts for the dashboard
     portfolio: dict = field(default_factory=dict)      # beta-weighted delta snapshot (see src.risk.portfolio)
+    scenarios: list[dict] = field(default_factory=list)  # what-if preset results (see src.risk.scenarios)
     skipped: list[dict] = field(default_factory=list)  # symbols skipped this scan (stale data, edge filters, ...)
     blocked: list[dict] = field(default_factory=list)  # candidates rejected by the earnings / risk gate
     rejected: int = 0
@@ -210,6 +212,7 @@ class ScanService:
         eq = equity or self.state.equity or self.settings.account_equity
         snap = self._snapshot = await self._portfolio(final, eq)
         self.state.portfolio = snap.to_dict()
+        self.state.scenarios = [r.to_dict() for r in run_presets(final, self.betas, eq, today)]
         dollars = {e.key: e.dollar_delta for e in snap.exposures}
         self.state.positions, self.state.alerts = [], []
         for r in reports:

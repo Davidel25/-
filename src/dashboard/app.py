@@ -116,6 +116,11 @@ def create_app(service: ScanService | None = None, settings: Settings | None = N
         """Beta-weighted (SPY-equivalent) delta of the open spreads versus the cap."""
         return state.portfolio
 
+    @app.get("/api/scenarios")
+    def scenarios() -> list[dict]:
+        """What-if presets: every open spread repriced under each shock. A rough stress test, not a forecast."""
+        return state.scenarios
+
     @app.get("/api/diagnostics")
     def diagnostics() -> dict:
         return {"skipped": state.skipped, "blocked": state.blocked}

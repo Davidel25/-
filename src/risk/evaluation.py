@@ -104,7 +104,8 @@ async def enrich_positions(broker: BrokerClient, positions: list[SpreadPosition]
             if delta is None:
                 notes.append("short-leg delta unavailable: delta alert skipped")
             long_q = find_long_quote(chain, pos)
-            pos = replace(pos, short_delta=delta, long_delta=quote_delta(long_q, today) if long_q else None)
+            pos = replace(pos, short_delta=delta, long_delta=quote_delta(long_q, today) if long_q else None,
+                          short_iv=quote.iv if quote else None, long_iv=long_q.iv if long_q else None)
         except BrokerError as exc:
             notes.append(f"market data unavailable ({exc}): delta/proximity checks skipped")
         entry = entry_deltas.get(pos.key)

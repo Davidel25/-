@@ -99,6 +99,11 @@ Dashboard API: `/api/health`, `/api/status`, `/api/signals`, `/api/positions`, `
   `MAX_NET_BETA_DELTA_PCT` of equity (default 100%). Signals that would ADD exposure past the cap are blocked, exposure-reducing
   ones are allowed, incomplete data (missing delta/price/SPY quote) blocks (fail closed). Betas are rough static inputs (`BETAS`).
   Candidates are each tested against the CURRENT book, not as a basket. `GET /api/portfolio`, alert `BETA_DELTA_LIMIT`.
+- What-if scenarios (`src/risk/scenarios.py`, `GET /api/scenarios`, dashboard card): every open spread is repriced with
+  Black-Scholes under 7 presets (SPY -3% / -5% / +3%, IV +10 pts, SPY -3% + IV +5, SPY -10% + IV +15, 5 days pass). Stocks move
+  beta x the SPY move; the model move is mapped onto the broker's mark so zero shock = zero change and a total wipe-out is
+  exactly -max loss. Parallel vol shift only (no skew/term dynamics), instantaneous move, no early assignment: a rough stress
+  test, not a forecast. Positions without leg IVs are excluded and the result is flagged incomplete.
 - Trade tagging: fixed vocabulary (`ALLOWED_TAGS`) + a 500-char note per trade via `POST /api/trades/tag` (dashboard "Tag"
   button); `GET /api/breakdown?by=tag` aggregates P&L by tag. Old SQLite files are migrated in place (`_ADDED_COLUMNS`).
 - Optional scale-out (`SCALE_OUT_PROFIT_PCT`, needs >= 2 contracts): advisory only, lowers variance, does not raise expectancy,

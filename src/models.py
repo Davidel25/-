@@ -135,6 +135,8 @@ class SpreadPosition:
     entry_short_delta: float | None = None  # |delta| of the short leg when the trade was opened
     initial_contracts: int | None = None    # size when first seen (None = unknown/never scaled); drives scale-out
     long_delta: float | None = None         # current |delta| of the long leg (for the vertical's net delta)
+    short_iv: float | None = None           # current implied vol of the short / long leg (annualised, 0.20 = 20%);
+    long_iv: float | None = None            # used by the what-if scenarios, None -> scenario is not computable
 
     @property
     def key(self) -> str:

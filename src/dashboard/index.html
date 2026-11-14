@@ -155,6 +155,15 @@
   <div id="pf"></div>
   <div class="note">Net delta of every open spread × beta to SPY, in dollars, against the cap. Positive = long the market. New signals that would push the total past the cap are blocked; trades that reduce it are allowed. Betas are rough inputs (unknown symbols assume 1.0, marked *).</div></div>
 
+<div class="card"><h2>What-if scenarios <span class="count" id="n-scen"></span>
+    <button class="mini" type="button" id="exp-scen" style="margin-left:auto">Export scenarios CSV</button></h2>
+  <div class="row" id="scpills" role="group" aria-label="Scenario presets"></div>
+  <div id="scsum" style="margin:12px 0 8px"></div>
+  <div class="wrap" style="max-height:none"><table id="scpos"></table></div>
+  <h2 style="margin-top:16px;font-size:13px;color:var(--muted)">All presets</h2>
+  <div class="wrap" style="max-height:none"><table id="scall"></table></div>
+  <div class="note">A rough stress test, not a forecast: every leg is repriced with Black-Scholes after the move, using a parallel IV shift (no skew or term-structure change), an instant move (no gaps, widened markets or early assignment) and rough betas (each stock moves β × the SPY move). The change is applied to your current mark and clamped to each spread's max loss / max profit. Positions without a known IV are excluded and flagged. Not affected by the filters above.</div></div>
+
 <div class="card"><h2>Risk alerts <span class="count" id="n-alerts">0</span> <span class="unread" id="unread" hidden>0</span></h2>
   <div id="alerts"></div>
   <details id="logbox"><summary>Alert log <span class="muted">(changes seen since this page was opened)</span></summary>
@@ -197,7 +206,7 @@ const stratName=s=>String(s||"").replace("_"," ").toLowerCase().replace(/\b\w/g,
 const isoDay=d=>{const z=n=>String(n).padStart(2,"0");return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`};
 
 /* ---- state ---- */
-const S={status:{},portfolio:{},tags:[],signals:[],positions:[],alerts:[],trades:[],snaps:[],diag:{skipped:[],blocked:[]},log:[],sig:null,loaded:false,lastOk:0};
+const S={status:{},portfolio:{},scen:[],tags:[],signals:[],positions:[],alerts:[],trades:[],snaps:[],diag:{skipped:[],blocked:[]},log:[],sig:null,loaded:false,lastOk:0};
 const F={q:"",preset:"ALL",start:"",end:"",strat:"ALL",perf:"ALL",status:"ALL",tag:"ALL"};
 const P={auto:true,interval:60};
 try{Object.assign(P,JSON.parse(localStorage.getItem("csm.prefs")||"{}"))}catch(e){}
@@ -276,6 +285,32 @@ function renderPortfolio(){const p=S.portfolio||{};
     <div class="meter" role="img" aria-label="Share of the delta cap in use"><i class="m-${k}" style="width:${w}%"></i><span class="cap" style="left:100%"></span></div>
     <div class="muted">${w}% of the cap in use${p.missing&&p.missing.length?` · missing data: ${esc(p.missing.join(", "))}`:""}</div>`;}
 
+function ensureScenPills(){const box=$("scpills");if(box.children.length||!S.scen.length)return;
+  scenSel=scenSel||(S.scen.find(x=>x.key==="spy_down_3_iv5")||S.scen[0]).key;
+  box.innerHTML=S.scen.map(x=>`<button class="pill" type="button" data-sc="${esc(x.key)}" aria-pressed="false" title="${esc(x.note)}">${esc(x.label)}</button>`).join("");}
+const signed=v=>typeof v==="number"?(v<0?"-":"+")+"$"+Math.abs(v).toFixed(0):"n/a";
+function renderScen(){ensureScenPills();const all=S.scen;$("n-scen").textContent=all.length?`${all.length} presets`:"";
+  if(!all.length){$("scsum").innerHTML='<div class="note">no open positions yet</div>';$("scpos").innerHTML="";$("scall").innerHTML="";return;}
+  document.querySelectorAll("#scpills button").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.sc===scenSel)));
+  const cur=all.find(x=>x.key===scenSel)||all[0],eq=S.status.equity;
+  $("scsum").innerHTML=`<div class="row" style="gap:22px"><div><div class="muted">Change in P&amp;L</div><b style="font-size:20px">${money(cur.total_change)}</b></div>
+    <div><div class="muted">% of equity</div><b style="font-size:20px">${cur.pct_of_equity==null?"n/a":(cur.pct_of_equity*100).toFixed(1)+"%"}</b></div>
+    <div><div class="muted">Projected open P&amp;L</div><b style="font-size:20px">${money(cur.projected_total_pnl)}</b></div>
+    <div><div class="muted">At max loss</div><b style="font-size:20px" class="${cur.at_max_loss?"neg":""}">${cur.at_max_loss} of ${cur.positions.length}</b></div>
+    <div>${cur.complete?badge("ALL PRICED","green"):badge("INCOMPLETE","amber")}</div></div>
+    ${cur.unavailable.length?`<div class="note">Not priced (no IV/price): ${esc(cur.unavailable.join(", "))}</div>`:""}`;
+  const now=k=>(S.positions.find(p=>p.key===k)||{});
+  table($("scpos"),[["Symbol",r=>`<b>${esc(r.symbol)}</b>`],["Strategy",r=>esc(stratName(r.spread_type))],["Strikes",r=>{const p=now(r.key);return p.short_strike?`${p.short_strike}/${p.long_strike}`:""}],
+    ["P&L now",r=>money(now(r.key).unrealized_pnl)],["Change",r=>money(r.pnl_change)],["Projected",r=>money(r.projected_pnl)],
+    ["",r=>(r.at_max_loss?badge("AT MAX LOSS","red"):"")+(r.beta_known?"":" <span class='muted' title='beta assumed 1.0'>β*</span>")]],cur.positions);
+  table($("scall"),[["Scenario",r=>`<a href="#" data-sc="${esc(r.key)}" style="color:inherit;font-weight:${r.key===cur.key?700:500}">${esc(r.label)}</a>`],["Change",r=>money(r.total_change)],
+    ["% equity",r=>r.pct_of_equity==null?"n/a":(r.pct_of_equity*100).toFixed(1)+"%"],["Projected",r=>money(r.projected_total_pnl)],
+    ["At max loss",r=>`${r.at_max_loss}`],["",r=>r.complete?"":badge("INCOMPLETE","amber")]],all);}
+$("scpills").addEventListener("click",e=>{const b=e.target.closest("button[data-sc]");if(b){scenSel=b.dataset.sc;renderScen()}});
+$("scall").addEventListener("click",e=>{const a=e.target.closest("a[data-sc]");if(a){e.preventDefault();scenSel=a.dataset.sc;renderScen()}});
+$("exp-scen").onclick=()=>download(`credit_spreads_scenarios_${isoDay(new Date())}.csv`,["Scenario","SPY move %","IV shift pts","Days passed","Position","Strategy","P&L change $","Projected P&L $","At max loss","All priced"],
+  S.scen.flatMap(x=>x.positions.length?x.positions.map(p=>[x.label,+(x.spot_move*100).toFixed(2),+(x.iv_shift*100).toFixed(1),x.days,p.key,stratName(p.spread_type),p.pnl_change,p.projected_pnl,p.at_max_loss?"yes":"no",x.complete?"yes":"no"]):[[x.label,+(x.spot_move*100).toFixed(2),+(x.iv_shift*100).toFixed(1),x.days,"(no positions)","",0,0,"no",x.complete?"yes":"no"]]));
+
 /* ---- metrics ---- */
 function metrics(trades){const w=trades.filter(t=>t.net_pnl>0),l=trades.filter(t=>t.net_pnl<0),sum=a=>a.reduce((x,t)=>x+(t.net_pnl||0),0);
   const gw=sum(w),gl=Math.abs(sum(l));
@@ -353,7 +388,7 @@ function exportTrades(){download(`credit_spreads_trades_${isoDay(new Date())}.cs
    fTrades().map(t=>[t.key,t.symbol,stratName(t.spread_type),t.expiry,t.short_strike,t.long_strike,t.contracts,t.first_seen,t.closed_at,t.entry_credit,t.exit_debit,t.exit_reason,t.commission,t.gross_pnl,t.net_pnl,t.entry_short_delta,t.entry_delta_source,t.pnl_is_estimate?"yes":"no",(t.tags||[]).join("; "),t.notes||""]));}
 
 /* ---- controls ---- */
-function renderAll(){renderChips();renderStats();renderPortfolio();renderAlerts();renderPositions();renderChart();renderTrades();renderSignals();renderDiag();
+function renderAll(){renderChips();renderStats();renderPortfolio();renderScen();renderAlerts();renderPositions();renderChart();renderTrades();renderSignals();renderDiag();
   const act=[F.q&&`search “${F.q}”`,F.strat!=="ALL"&&stratName(F.strat),F.perf!=="ALL"&&(F.perf==="WIN"?"profitable":"losing"),F.status!=="ALL"&&`status ${F.status}`,F.tag!=="ALL"&&`tag ${F.tag.toLowerCase()}`,(F.start||F.end)&&`${F.start||"…"} → ${F.end||"…"}`].filter(Boolean);
   $("filterhint").textContent=act.length?`Active filters (AND): ${act.join(" · ")}. The date range applies to trade history and the chart; open positions are always current.`:"No filters active.";}
 function setPreset(p){F.preset=p;const now=new Date(),d=new Date(now);
@@ -371,7 +406,7 @@ $("exp-pos").onclick=exportPositions;$("exp-trd").onclick=exportTrades;
 $("markread").onclick=()=>{S.log.forEach(x=>x.read=true);renderLog()};$("clearlog").onclick=()=>{S.log=[];renderLog()};
 $("logbox").addEventListener("toggle",()=>{if($("logbox").open){S.log.forEach(x=>x.read=true);renderLog()}});
 /* ---- trade tagging dialog ---- */
-let tagKey=null;
+let tagKey=null,scenSel=null;
 function openTag(key){const t=S.trades.find(x=>x.key===key);if(!t)return;tagKey=key;$("tagerr").textContent="";
   $("tagtitle").textContent=`${t.symbol} ${stratName(t.spread_type)} ${t.short_strike}/${t.long_strike} · closed ${(t.closed_at||"").slice(0,10)} · last rule ${t.exit_reason||"n/a"} · net ${t.net_pnl<0?"-":""}$${Math.abs(t.net_pnl||0).toFixed(0)}`;
   $("tagopts").innerHTML=S.tags.map(g=>`<label class="opt"><input type="checkbox" value="${esc(g)}" ${(t.tags||[]).includes(g)?"checked":""}>${esc(g.replace(/_/g," "))}</label>`).join("");
@@ -391,8 +426,8 @@ function fillTagFilter(){const sel=$("tag");if(sel.options.length>2||!S.tags.len
 let timer=null,tick=null,inflight=false,nextAt=0;
 async function refresh(){if(inflight)return;inflight=true;$("spin").classList.add("on");
   try{const get=p=>fetch("/api/"+p,{cache:"no-store"}).then(r=>{if(!r.ok)throw new Error(p+" "+r.status);return r.json()});
-    const [st,sg,po,al,tr,pn,dg,pf,tg]=await Promise.all(["status","signals","positions","alerts","trades","pnl","diagnostics","portfolio","tags"].map(get));
-    Object.assign(S,{status:st,signals:sg,positions:po,alerts:al,trades:tr,snaps:pn.snapshots,diag:dg,portfolio:pf,tags:tg.tags});fillTagFilter();
+    const [st,sg,po,al,tr,pn,dg,pf,tg,sc]=await Promise.all(["status","signals","positions","alerts","trades","pnl","diagnostics","portfolio","tags","scenarios"].map(get));
+    Object.assign(S,{status:st,signals:sg,positions:po,alerts:al,trades:tr,snaps:pn.snapshots,diag:dg,portfolio:pf,tags:tg.tags,scen:sc});fillTagFilter();
     const prev=S.sig;S.sig=detectChanges(prev||{},!prev);  /* the first load only sets the baseline: no toasts */
     S.loaded=true;S.lastOk=Date.now();renderAll();renderLog();
     $("updated").textContent="Updated "+new Date().toLocaleTimeString([], {hour12:false});
