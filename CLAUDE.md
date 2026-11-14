@@ -95,6 +95,12 @@ Dashboard API: `/api/health`, `/api/status`, `/api/signals`, `/api/positions`, `
 - `ScanService` blocks signals with unknown / in-window earnings, skips scans outside market hours and on stale quotes, captures
   `entry_short_delta` automatically (signal delta > first-scan delta; the manual journal overrides), and logs to SQLite.
   Closed-trade P&L is an ESTIMATE (last seen debit, modelled commissions); a position must be missing for 2 scans to count as closed.
+- Earnings feed (`src/risk/earnings_feed.py`, `GET /api/earnings`, dashboard card): optional automated calendar
+  (`EARNINGS_PROVIDER=finnhub` + `EARNINGS_API_KEY`) layered UNDER the manual `EARNINGS_FILE`. Fail closed: vendor dates are only
+  ever PROJECTED, an empty answer / missing symbol / failed fetch older than `EARNINGS_MAX_STALE_HOURS` / implausibly distant date
+  is UNKNOWN (signals blocked), ETFs never hit the network, the key never appears in logs/repr/errors. Network I/O runs in a worker
+  thread inside `refresh()`; `get()` reads memory. The Finnhub adapter follows the documented shape but is NOT verified against
+  the live API - if auth is rejected the dashboard shows the error; try `EARNINGS_AUTH=query`.
 - Portfolio guard (`src/risk/portfolio.py`): net beta-weighted (SPY-equivalent) dollar delta of all open spreads vs
   `MAX_NET_BETA_DELTA_PCT` of equity (default 100%). Signals that would ADD exposure past the cap are blocked, exposure-reducing
   ones are allowed, incomplete data (missing delta/price/SPY quote) blocks (fail closed). Betas are rough static inputs (`BETAS`).
@@ -112,5 +118,5 @@ Dashboard API: `/api/health`, `/api/status`, `/api/signals`, `/api/positions`, `
 ## Known gaps / next steps
 - Dashboard live state is in-memory; trade history / P&L snapshots persist in SQLite (`TRADE_DB_PATH`). Fills are not read from the broker, so P&L is estimated.
 - No dashboard authentication, and `pair_legs` only recognises simple verticals (no iron condors / rolled legs).
-- IV rank / earnings-date / ex-dividend filters are not implemented; add them in `strategies/` before trusting signals.
+- IV rank and ex-dividend filters are not implemented (earnings: see the feed above); add them in `strategies/` before trusting signals.
 - Black-Scholes fallback delta ignores dividends and American exercise; prefer broker model Greeks.

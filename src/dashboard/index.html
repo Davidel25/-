@@ -184,6 +184,10 @@
 <div class="card"><h2>Trade history <span class="count" id="n-trades">0</span></h2><div class="wrap"><table id="trades"></table></div>
   <div class="note">Use “Tag” to record why a trade ended (earnings gap, macro sell-off, …) plus a note. Tags feed <code>/api/breakdown?by=tag</code>.</div></div>
 <div class="card"><h2>New signals <span class="count" id="n-sig">0</span></h2><div class="wrap"><table id="signals"></table></div></div>
+<div class="card"><h2>Earnings calendar <span class="count" id="n-earn"></span> <span id="earnfeed"></span></h2>
+  <div class="wrap" style="max-height:none"><table id="earn"></table></div>
+  <div class="note">What the earnings gate believes right now. <b>UNKNOWN blocks new signals</b> for that stock (fail closed). Dates from the automated feed are only ever PROJECTED; a manual calendar entry is the only way to mark CONFIRMED and it always wins. ETFs have no earnings event.</div></div>
+
 <div class="card"><details id="diagbox"><summary>Blocked &amp; skipped <span class="count" id="n-diag">0</span></summary><ul class="plain" id="diag"></ul></details></div>
 
 <dialog id="tagdlg"><form method="dialog" id="tagform">
@@ -206,7 +210,7 @@ const stratName=s=>String(s||"").replace("_"," ").toLowerCase().replace(/\b\w/g,
 const isoDay=d=>{const z=n=>String(n).padStart(2,"0");return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`};
 
 /* ---- state ---- */
-const S={status:{},portfolio:{},scen:[],tags:[],signals:[],positions:[],alerts:[],trades:[],snaps:[],diag:{skipped:[],blocked:[]},log:[],sig:null,loaded:false,lastOk:0};
+const S={status:{},portfolio:{},scen:[],earn:{feed:{},rows:[]},tags:[],signals:[],positions:[],alerts:[],trades:[],snaps:[],diag:{skipped:[],blocked:[]},log:[],sig:null,loaded:false,lastOk:0};
 const F={q:"",preset:"ALL",start:"",end:"",strat:"ALL",perf:"ALL",status:"ALL",tag:"ALL"};
 const P={auto:true,interval:60};
 try{Object.assign(P,JSON.parse(localStorage.getItem("csm.prefs")||"{}"))}catch(e){}
@@ -311,6 +315,15 @@ $("scall").addEventListener("click",e=>{const a=e.target.closest("a[data-sc]");i
 $("exp-scen").onclick=()=>download(`credit_spreads_scenarios_${isoDay(new Date())}.csv`,["Scenario","SPY move %","IV shift pts","Days passed","Position","Strategy","P&L change $","Projected P&L $","At max loss","All priced"],
   S.scen.flatMap(x=>x.positions.length?x.positions.map(p=>[x.label,+(x.spot_move*100).toFixed(2),+(x.iv_shift*100).toFixed(1),x.days,p.key,stratName(p.spread_type),p.pnl_change,p.projected_pnl,p.at_max_loss?"yes":"no",x.complete?"yes":"no"]):[[x.label,+(x.spot_move*100).toFixed(2),+(x.iv_shift*100).toFixed(1),x.days,"(no positions)","",0,0,"no",x.complete?"yes":"no"]]));
 
+const EARN={CONFIRMED:["CONFIRMED","green"],PROJECTED:["PROJECTED","amber"],UNKNOWN:["UNKNOWN · BLOCKS","red"],NOT_APPLICABLE:["ETF · n/a","gray"]};
+function renderEarnings(){const e=S.earn||{feed:{},rows:[]},f=e.feed||{};$("n-earn").textContent=e.rows.length?`${e.rows.length} symbols`:"";
+  $("earnfeed").innerHTML=f.provider?badge(`${f.provider} feed ${f.ok?"ok":"needs attention"}`,f.ok?"green":"amber")+
+    (f.last_refresh?` <span class="muted">refreshed ${esc(f.last_refresh.replace("T"," ").slice(0,16))} UTC</span>`:' <span class="muted">not refreshed yet</span>'):badge("manual calendar only","gray");
+  const bad=Object.entries(f.failed||{}).map(([k,v])=>`${esc(k)}: ${esc(v)}`).concat((f.stale||[]).map(k=>`${esc(k)}: cached data too old`));
+  table($("earn"),[["Symbol",r=>`<b>${esc(r.symbol)}</b>`],["Next earnings",r=>r.date?esc(r.date):"—"],["In",r=>r.days_to==null?"—":r.days_to+" d"],
+    ["Data age",r=>r.age_hours==null?"—":r.age_hours<1?"<1 h":r.age_hours.toFixed(0)+" h"],["Status",r=>{const m=EARN[r.status]||[r.status,"gray"];return badge(m[0],m[1])}]],e.rows);
+  if($("earnbad"))$("earnbad").remove();
+  if(bad.length)$("earn").insertAdjacentHTML("afterend",`<div class="banner b-amber" id="earnbad" style="margin-top:10px">Earnings feed problems: ${bad.join(" · ")}</div>`);}
 /* ---- metrics ---- */
 function metrics(trades){const w=trades.filter(t=>t.net_pnl>0),l=trades.filter(t=>t.net_pnl<0),sum=a=>a.reduce((x,t)=>x+(t.net_pnl||0),0);
   const gw=sum(w),gl=Math.abs(sum(l));
@@ -388,7 +401,7 @@ function exportTrades(){download(`credit_spreads_trades_${isoDay(new Date())}.cs
    fTrades().map(t=>[t.key,t.symbol,stratName(t.spread_type),t.expiry,t.short_strike,t.long_strike,t.contracts,t.first_seen,t.closed_at,t.entry_credit,t.exit_debit,t.exit_reason,t.commission,t.gross_pnl,t.net_pnl,t.entry_short_delta,t.entry_delta_source,t.pnl_is_estimate?"yes":"no",(t.tags||[]).join("; "),t.notes||""]));}
 
 /* ---- controls ---- */
-function renderAll(){renderChips();renderStats();renderPortfolio();renderScen();renderAlerts();renderPositions();renderChart();renderTrades();renderSignals();renderDiag();
+function renderAll(){renderChips();renderStats();renderPortfolio();renderScen();renderEarnings();renderAlerts();renderPositions();renderChart();renderTrades();renderSignals();renderDiag();
   const act=[F.q&&`search “${F.q}”`,F.strat!=="ALL"&&stratName(F.strat),F.perf!=="ALL"&&(F.perf==="WIN"?"profitable":"losing"),F.status!=="ALL"&&`status ${F.status}`,F.tag!=="ALL"&&`tag ${F.tag.toLowerCase()}`,(F.start||F.end)&&`${F.start||"…"} → ${F.end||"…"}`].filter(Boolean);
   $("filterhint").textContent=act.length?`Active filters (AND): ${act.join(" · ")}. The date range applies to trade history and the chart; open positions are always current.`:"No filters active.";}
 function setPreset(p){F.preset=p;const now=new Date(),d=new Date(now);
@@ -426,8 +439,8 @@ function fillTagFilter(){const sel=$("tag");if(sel.options.length>2||!S.tags.len
 let timer=null,tick=null,inflight=false,nextAt=0;
 async function refresh(){if(inflight)return;inflight=true;$("spin").classList.add("on");
   try{const get=p=>fetch("/api/"+p,{cache:"no-store"}).then(r=>{if(!r.ok)throw new Error(p+" "+r.status);return r.json()});
-    const [st,sg,po,al,tr,pn,dg,pf,tg,sc]=await Promise.all(["status","signals","positions","alerts","trades","pnl","diagnostics","portfolio","tags","scenarios"].map(get));
-    Object.assign(S,{status:st,signals:sg,positions:po,alerts:al,trades:tr,snaps:pn.snapshots,diag:dg,portfolio:pf,tags:tg.tags,scen:sc});fillTagFilter();
+    const [st,sg,po,al,tr,pn,dg,pf,tg,sc,er]=await Promise.all(["status","signals","positions","alerts","trades","pnl","diagnostics","portfolio","tags","scenarios","earnings"].map(get));
+    Object.assign(S,{status:st,signals:sg,positions:po,alerts:al,trades:tr,snaps:pn.snapshots,diag:dg,portfolio:pf,tags:tg.tags,scen:sc,earn:er});fillTagFilter();
     const prev=S.sig;S.sig=detectChanges(prev||{},!prev);  /* the first load only sets the baseline: no toasts */
     S.loaded=true;S.lastOk=Date.now();renderAll();renderLog();
     $("updated").textContent="Updated "+new Date().toLocaleTimeString([], {hour12:false});

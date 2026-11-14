@@ -121,6 +121,11 @@ def create_app(service: ScanService | None = None, settings: Settings | None = N
         """What-if presets: every open spread repriced under each shock. A rough stress test, not a forecast."""
         return state.scenarios
 
+    @app.get("/api/earnings")
+    def earnings() -> dict:
+        """What the earnings gate believes per symbol, plus feed health. UNKNOWN means signals are blocked."""
+        return service.earnings_table()
+
     @app.get("/api/diagnostics")
     def diagnostics() -> dict:
         return {"skipped": state.skipped, "blocked": state.blocked}

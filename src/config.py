@@ -38,9 +38,9 @@ class Settings:
     scan_interval_sec: int = 300
     scan_enabled: bool = True
     account_equity: float = 50_000.0
-    telegram_token: str = ""
+    telegram_token: str = field(default="", repr=False)   # secrets are excluded from repr so they cannot leak to logs
     telegram_chat_id: str = ""
-    webhook_url: str = ""
+    webhook_url: str = field(default="", repr=False)
     # --- guards / hardening (dataclass defaults keep mocks and tests simple; from_env turns the guards on) ---
     enforce_market_hours: bool = False   # skip scans outside the regular US session
     enforce_quote_freshness: bool = True # reject chains whose quotes are stale or untimed
@@ -53,6 +53,12 @@ class Settings:
     betas: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_BETAS))  # beta to SPY by symbol
     max_net_beta_delta_pct: float = 1.0  # cap on net beta-weighted delta as a fraction of equity
     scale_out_profit_pct: float = 0.0    # 0 = off; 0.30 / 0.40 recommends closing half of a >= 2 contract position
+    earnings_provider: str = "file"      # "file" (manual calendar only) | "finnhub" (automated feed layered under it)
+    earnings_api_key: str = field(default="", repr=False)
+    earnings_auth: str = "header"        # how the API key is sent: "header" | "query" (switch if the vendor rejects it)
+    earnings_cache_file: str = ""        # feed cache (JSON); empty -> memory only
+    earnings_ttl_hours: float = 12.0     # re-fetch a symbol when its cached date is older than this
+    earnings_max_stale_hours: float = 72.0  # a cached date older than this is treated as UNKNOWN
     earnings_file: str = ""         # JSON earnings calendar (see src/risk/earnings.py); empty -> ETFs only
     entry_deltas_file: str = ""     # JSON journal {position key: entry |delta|} for the delta alert
 
@@ -94,6 +100,12 @@ class Settings:
             betas={**DEFAULT_BETAS, **parse_betas(os.getenv("BETAS", ""))},
             max_net_beta_delta_pct=float(os.getenv("MAX_NET_BETA_DELTA_PCT", "1.0")),
             scale_out_profit_pct=float(os.getenv("SCALE_OUT_PROFIT_PCT", "0")),
+            earnings_provider=os.getenv("EARNINGS_PROVIDER", "file").lower(),
+            earnings_api_key=os.getenv("EARNINGS_API_KEY", ""),
+            earnings_auth=os.getenv("EARNINGS_AUTH", "header").lower(),
+            earnings_cache_file=os.getenv("EARNINGS_CACHE_FILE", "data/earnings_cache.json"),
+            earnings_ttl_hours=float(os.getenv("EARNINGS_TTL_HOURS", "12")),
+            earnings_max_stale_hours=float(os.getenv("EARNINGS_MAX_STALE_HOURS", "72")),
             earnings_file=os.getenv("EARNINGS_FILE", ""),
             entry_deltas_file=os.getenv("ENTRY_DELTAS_FILE", ""),
         )

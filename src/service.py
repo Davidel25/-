@@ -17,7 +17,8 @@ from src.data.market_data import MarketDataService
 from src.data.stats import UnderlyingStats, build_stats
 from src.market_hours import is_market_open
 from src.models import OptionQuote, SpreadPosition, SpreadSignal, SpreadType
-from src.risk.earnings import EarningsProvider, JsonFile, StaticEarningsProvider
+from src.risk.earnings import EarningsProvider
+from src.risk.earnings_feed import build_earnings_provider
 from src.risk.evaluation import PositionReport, Status, enrich_positions, evaluate_position
 from src.risk.manager import ExitAction, RiskLimits, RiskManager, pair_legs
 from src.risk.portfolio import PortfolioSnapshot, build_snapshot, signal_dollar_delta
@@ -39,6 +40,7 @@ class AppState:
     alerts: list[dict] = field(default_factory=list)   # flattened per-position alerts for the dashboard
     portfolio: dict = field(default_factory=dict)      # beta-weighted delta snapshot (see src.risk.portfolio)
     scenarios: list[dict] = field(default_factory=list)  # what-if preset results (see src.risk.scenarios)
+    earnings_feed: dict = field(default_factory=dict)  # feed health (empty when no automated feed is configured)
     skipped: list[dict] = field(default_factory=list)  # symbols skipped this scan (stale data, edge filters, ...)
     blocked: list[dict] = field(default_factory=list)  # candidates rejected by the earnings / risk gate
     rejected: int = 0
@@ -60,8 +62,7 @@ class ScanService:
         self.settings, self.broker, self.dispatcher = settings, broker, dispatcher
         self.clock = clock or (lambda: datetime.now(UTC))
         # Fail safe: without a calendar every single stock is flagged for manual review (only known ETFs are clear).
-        self.earnings: EarningsProvider = earnings or (
-            JsonFile(settings.earnings_file) if settings.earnings_file else StaticEarningsProvider())
+        self.earnings: EarningsProvider = earnings or build_earnings_provider(settings)
         self._journal = entry_deltas  # manual overrides; None -> read settings.entry_deltas_file each cycle
         self.trade_log = trade_log or TradeLog(settings.trade_db_path or ":memory:", settings.commission_per_contract)
         self.risk = risk or RiskManager(RiskLimits(
@@ -78,6 +79,31 @@ class ScanService:
         lo, hi = ((max(7, self.cfg.min_dte - 18), self.cfg.max_dte + 20) if self.cfg.min_term_slope is not None
                   else (self.cfg.min_dte, self.cfg.max_dte))
         self.data = MarketDataService(broker, lo, hi)
+
+    async def _refresh_earnings(self, symbols) -> None:
+        """Refresh the automated earnings feed (blocking HTTP, so in a worker thread). Never raises: a failure just
+        leaves the affected symbols UNKNOWN, which blocks their signals."""
+        refresh = getattr(self.earnings, "refresh", None)
+        if refresh is not None:
+            try:
+                await asyncio.to_thread(refresh, sorted({s.upper() for s in symbols}))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("earnings refresh failed (%s)", type(exc).__name__)
+        health = getattr(self.earnings, "health", None)
+        self.state.earnings_feed = health() if health else {}
+
+    def earnings_table(self) -> dict:
+        """What the earnings gate currently believes, per symbol (watchlist + open positions)."""
+        symbols = sorted({s.upper() for s in self.settings.watchlist} | {p["symbol"] for p in self.state.positions})
+        age = getattr(self.earnings, "age_hours", None)
+        today = date.today()
+        rows = []
+        for sym in symbols:
+            info = self.earnings.get(sym)
+            rows.append({"symbol": sym, "date": info.date.isoformat() if info.date else None,
+                         "status": info.status.value, "days_to": (info.date - today).days if info.date else None,
+                         "age_hours": age(sym) if age else None})
+        return {"feed": self.state.earnings_feed, "rows": rows}
 
     async def _ensure_connected(self) -> None:
         if not self.broker.is_connected():
@@ -97,6 +123,7 @@ class ScanService:
             await self._ensure_connected()
             equity = await self.broker.get_account_equity() or self.settings.account_equity
             self.state.equity = equity
+            await self._refresh_earnings(self.settings.watchlist)
             positions = await self.check_positions(equity)
 
             approved: list[SpreadSignal] = []
@@ -188,6 +215,7 @@ class ScanService:
         Read-only: never trades."""
         now, today = self.clock(), date.today()
         positions = pair_legs(await self.broker.get_option_positions())
+        await self._refresh_earnings([p.symbol for p in positions])
         journal = self._journal_now()
         known = {**self.trade_log.entry_deltas(), **journal}  # manual journal wins over automatic capture
         enriched = await enrich_positions(self.broker, positions, today, known)
