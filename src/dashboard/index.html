@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Credit Spread Scanner</title>
+<style>
+ body{font:14px system-ui,sans-serif;margin:0;padding:16px;background:#0f1419;color:#e6e6e6}
+ h1{font-size:18px} h2{font-size:15px;margin-top:24px}
+ .badge{padding:2px 8px;border-radius:10px;background:#2a3340;margin-right:6px}
+ .ok{background:#1e5b36}.bad{background:#7a2323}
+ table{border-collapse:collapse;width:100%} th,td{padding:6px 8px;border-bottom:1px solid #2a3340;text-align:right}
+ th:first-child,td:first-child{text-align:left} .wrap{overflow-x:auto}
+</style></head><body>
+<h1>Credit Spread Scanner</h1><div id="status"></div>
+<h2>Signals</h2><div class="wrap"><table id="signals"></table></div>
+<h2>Open positions</h2><div class="wrap"><table id="positions"></table></div>
+<script>
+const f=(v,d=2)=>typeof v==="number"?v.toFixed(d):v, pct=v=>(v*100).toFixed(0)+"%";
+function table(el,cols,rows){
+  el.innerHTML="<tr>"+cols.map(c=>"<th>"+c[0]+"</th>").join("")+"</tr>"+
+   (rows.length?rows.map(r=>"<tr>"+cols.map(c=>"<td>"+c[1](r)+"</td>").join("")+"</tr>").join(""):"<tr><td colspan="+cols.length+">none</td></tr>");}
+async function load(){
+  const [s,sig,pos]=await Promise.all(["status","signals","positions"].map(p=>fetch("/api/"+p).then(r=>r.json())));
+  document.getElementById("status").innerHTML=
+   `<span class="badge ${s.broker_connected?"ok":"bad"}">broker ${s.broker} ${s.broker_connected?"connected":"disconnected"}</span>`+
+   `<span class="badge">${s.trading_mode}</span><span class="badge">last scan ${s.last_scan||"never"}</span>`+
+   `<span class="badge">equity ${s.equity?"$"+f(s.equity,0):"n/a"}</span>`+(s.last_error?`<span class="badge bad">${s.last_error}</span>`:"");
+  table(document.getElementById("signals"),[["Symbol",r=>r.symbol],["Type",r=>r.spread_type],["Expiry",r=>r.expiry],["DTE",r=>r.dte],
+   ["Strikes",r=>r.short_strike+"/"+r.long_strike],["Credit",r=>f(r.credit)],["Max risk",r=>"$"+f(r.max_loss,0)],["ROC",r=>pct(r.roc)],["|Δ|",r=>f(r.short_delta)],["POP",r=>pct(r.pop)]],sig);
+  table(document.getElementById("positions"),[["Symbol",r=>r.symbol],["Type",r=>r.spread_type],["Expiry",r=>r.expiry],["Strikes",r=>r.short_strike+"/"+r.long_strike],
+   ["Qty",r=>r.contracts],["P&L",r=>"$"+f(r.unrealized_pnl,0)],["% credit",r=>pct(r.profit_pct)],["Action",r=>r.action]],pos);
+}
+load();setInterval(load,15000);
+</script></body></html>

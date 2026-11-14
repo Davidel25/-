@@ -1,0 +1,43 @@
+# Two services: IB Gateway (headless, via IBC) + the scanner/dashboard app.
+# Gateway image docs: https://github.com/gnzsnz/ib-gateway-docker  (verify env names against the tag you pin)
+#
+# Port map (gnzsnz image): inside the compose network the API is on 4003 (live) / 4004 (paper);
+# on the host they are published as 4001 (live) / 4002 (paper), bound to localhost only.
+services:
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable   # pin a specific version tag in production
+    restart: unless-stopped
+    environment:
+      TWS_USERID: ${TWS_USERID}
+      TWS_PASSWORD: ${TWS_PASSWORD}
+      TRADING_MODE: ${TRADING_MODE:-paper}     # paper | live
+      READ_ONLY_API: "yes"                     # scanner never trades; keep the API read-only
+      TWOFA_TIMEOUT_ACTION: restart
+      AUTO_RESTART_TIME: "11:59 PM"            # IBKR forces a daily restart
+      VNC_SERVER_PASSWORD: ${VNC_SERVER_PASSWORD:-}
+      TZ: America/New_York
+    ports:
+      - "127.0.0.1:4001:4003"   # live API   (host 4001)
+      - "127.0.0.1:4002:4004"   # paper API  (host 4002)
+      - "127.0.0.1:5900:5900"   # VNC for 2FA / debugging - tunnel over SSH, never expose publicly
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 4003 || nc -z localhost 4004"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      ib-gateway:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      BROKER: ${BROKER:-ib}
+      IB_HOST: ib-gateway
+      # container-to-container port: 4004 paper / 4003 live
+      IB_PORT: ${IB_PORT:-4004}
+    ports:
+      - "127.0.0.1:8000:8000"   # dashboard has NO auth: reach it via SSH tunnel / SSM / authenticated reverse proxy

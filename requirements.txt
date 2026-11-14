@@ -1,0 +1,6 @@
+# Runtime
+pandas>=2.2
+requests>=2.32
+ib_async>=1.0      # maintained fork of ib_insync (same API). Swap for ib_insync if preferred.
+fastapi>=0.115
+uvicorn[standard]>=0.30
