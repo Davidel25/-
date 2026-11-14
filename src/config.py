@@ -33,6 +33,8 @@ class Settings:
     telegram_token: str = ""
     telegram_chat_id: str = ""
     webhook_url: str = ""
+    earnings_file: str = ""         # JSON earnings calendar (see src/risk/earnings.py); empty -> ETFs only
+    entry_deltas_file: str = ""     # JSON journal {position key: entry |delta|} for the delta alert
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -54,4 +56,6 @@ class Settings:
             telegram_token=os.getenv("TELEGRAM_TOKEN", ""),
             telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
             webhook_url=os.getenv("ALERT_WEBHOOK_URL", ""),
+            earnings_file=os.getenv("EARNINGS_FILE", ""),
+            entry_deltas_file=os.getenv("ENTRY_DELTAS_FILE", ""),
         )

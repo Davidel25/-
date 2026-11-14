@@ -51,6 +51,7 @@ def create_app(service: ScanService | None = None, settings: Settings | None = N
             "last_error": state.last_error, "scans": state.scans, "equity": state.equity,
             "watchlist": settings.watchlist, "signals": len(state.signals),
             "positions": len(state.positions), "rejected_by_risk": state.rejected,
+            "position_status": service.position_counts(), "alerts": len(state.alerts),
         }
 
     @app.get("/api/signals")
@@ -60,6 +61,10 @@ def create_app(service: ScanService | None = None, settings: Settings | None = N
     @app.get("/api/positions")
     def positions() -> list[dict]:
         return state.positions
+
+    @app.get("/api/alerts")
+    def alerts() -> list[dict]:
+        return state.alerts
 
     return app
 

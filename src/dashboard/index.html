@@ -5,12 +5,15 @@
  body{font:14px system-ui,sans-serif;margin:0;padding:16px;background:#0f1419;color:#e6e6e6}
  h1{font-size:18px} h2{font-size:15px;margin-top:24px}
  .badge{padding:2px 8px;border-radius:10px;background:#2a3340;margin-right:6px}
- .ok{background:#1e5b36}.bad{background:#7a2323}
+ .ok{background:#1e5b36}.bad{background:#7a2323}.warn{background:#7a5c14}
+ .ACTION{color:#ff8a80;font-weight:600}.REVIEW{color:#ffd180;font-weight:600}.OK{color:#8bd8a0}
+ .alert{text-align:left;font-size:13px;padding:4px 8px;border-left:3px solid #7a5c14;margin:4px 0}.alert.HIGH{border-color:#c62828}
  table{border-collapse:collapse;width:100%} th,td{padding:6px 8px;border-bottom:1px solid #2a3340;text-align:right}
  th:first-child,td:first-child{text-align:left} .wrap{overflow-x:auto}
 </style></head><body>
 <h1>Credit Spread Scanner</h1><div id="status"></div>
 <h2>Signals</h2><div class="wrap"><table id="signals"></table></div>
+<h2>Risk alerts</h2><div id="alerts"></div>
 <h2>Open positions</h2><div class="wrap"><table id="positions"></table></div>
 <script>
 const f=(v,d=2)=>typeof v==="number"?v.toFixed(d):v, pct=v=>(v*100).toFixed(0)+"%";
@@ -18,15 +21,19 @@ function table(el,cols,rows){
   el.innerHTML="<tr>"+cols.map(c=>"<th>"+c[0]+"</th>").join("")+"</tr>"+
    (rows.length?rows.map(r=>"<tr>"+cols.map(c=>"<td>"+c[1](r)+"</td>").join("")+"</tr>").join(""):"<tr><td colspan="+cols.length+">none</td></tr>");}
 async function load(){
-  const [s,sig,pos]=await Promise.all(["status","signals","positions"].map(p=>fetch("/api/"+p).then(r=>r.json())));
+  const [s,sig,pos,al]=await Promise.all(["status","signals","positions","alerts"].map(p=>fetch("/api/"+p).then(r=>r.json())));
   document.getElementById("status").innerHTML=
    `<span class="badge ${s.broker_connected?"ok":"bad"}">broker ${s.broker} ${s.broker_connected?"connected":"disconnected"}</span>`+
    `<span class="badge">${s.trading_mode}</span><span class="badge">last scan ${s.last_scan||"never"}</span>`+
-   `<span class="badge">equity ${s.equity?"$"+f(s.equity,0):"n/a"}</span>`+(s.last_error?`<span class="badge bad">${s.last_error}</span>`:"");
+   `<span class="badge">equity ${s.equity?"$"+f(s.equity,0):"n/a"}</span>`+(s.last_error?`<span class="badge bad">${s.last_error}</span>`:"")+
+   (s.position_status?`<span class="badge ${s.position_status.ACTION?"bad":s.position_status.REVIEW?"warn":"ok"}">positions: ${s.position_status.ACTION} action / ${s.position_status.REVIEW} review / ${s.position_status.OK} ok</span>`:"");
   table(document.getElementById("signals"),[["Symbol",r=>r.symbol],["Type",r=>r.spread_type],["Expiry",r=>r.expiry],["DTE",r=>r.dte],
    ["Strikes",r=>r.short_strike+"/"+r.long_strike],["Credit",r=>f(r.credit)],["Max risk",r=>"$"+f(r.max_loss,0)],["ROC",r=>pct(r.roc)],["|Δ|",r=>f(r.short_delta)],["POP",r=>pct(r.pop)]],sig);
   table(document.getElementById("positions"),[["Symbol",r=>r.symbol],["Type",r=>r.spread_type],["Expiry",r=>r.expiry],["Strikes",r=>r.short_strike+"/"+r.long_strike],
-   ["Qty",r=>r.contracts],["P&L",r=>"$"+f(r.unrealized_pnl,0)],["% credit",r=>pct(r.profit_pct)],["Action",r=>r.action]],pos);
+   ["Qty",r=>r.contracts],["P&L",r=>"$"+f(r.unrealized_pnl,0)],["% credit",r=>pct(r.profit_pct)],["Short Δ",r=>r.short_delta==null?"n/a":f(r.short_delta)],["To short",r=>r.distance_to_short_pct==null?"n/a":f(r.distance_to_short_pct*100,1)+"%"],
+   ["Exit rule",r=>r.action],["Status",r=>`<span class="${r.status}">${r.status}</span>`]],pos);
+  const esc=t=>String(t).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+  document.getElementById("alerts").innerHTML=al.length?al.map(a=>`<div class="alert ${a.severity}"><b>${a.severity} ${a.type}</b> ${esc(a.position)}<br>${esc(a.message)}</div>`).join(""):"<div class='alert'>none</div>";
 }
 load();setInterval(load,15000);
 </script></body></html>

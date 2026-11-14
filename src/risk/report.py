@@ -29,106 +29,18 @@ import asyncio
 import json
 import logging
 import sys
-from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
-from enum import StrEnum
 from pathlib import Path
 
 from src.broker.base import BrokerClient, BrokerError
 from src.broker.factory import create_broker
 from src.config import Settings
-from src.data.greeks import bs_delta
-from src.models import OptionQuote, PositionLeg, SpreadPosition
-from src.risk.earnings import EarningsInfo, EarningsProvider, JsonFile, StaticEarningsProvider
-from src.risk.manager import ExitAction, RiskAlert, RiskManager, Severity, pair_legs
+from src.models import PositionLeg
+from src.risk.earnings import EarningsProvider, JsonFile, StaticEarningsProvider
+from src.risk.evaluation import PositionReport, Status, enrich_positions, evaluate_position
+from src.risk.manager import RiskManager, pair_legs
 
 log = logging.getLogger("risk_report")
-RISK_FREE = 0.045
-
-
-class Status(StrEnum):
-    ACTION = "ACTION"  # close / roll / take profit now
-    REVIEW = "REVIEW"  # needs a human look or data is missing
-    OK = "OK"
-
-
-@dataclass(frozen=True)
-class PositionReport:
-    position: SpreadPosition
-    action: ExitAction
-    alerts: list[RiskAlert]
-    notes: list[str] = field(default_factory=list)  # data gaps (fail-safe: they force REVIEW)
-
-    @property
-    def status(self) -> Status:
-        if self.action is not ExitAction.HOLD or any(a.severity is Severity.HIGH for a in self.alerts):
-            return Status.ACTION
-        return Status.REVIEW if (self.alerts or self.notes) else Status.OK
-
-    @property
-    def recommendation(self) -> str:
-        if self.action is ExitAction.TAKE_PROFIT:
-            return "Take profit: buy the spread back at the working limit."
-        if self.action is ExitAction.STOP_LOSS:
-            return "Stop hit: close the spread (loss >= stop multiple of credit)."
-        if self.action is ExitAction.CLOSE_DTE:
-            return "DTE cutoff: close or roll (for a credit) to avoid final-days gamma."
-        if self.status is Status.ACTION:
-            return "Act now: close, or roll out/away for a net credit only."
-        if self.status is Status.REVIEW:
-            return "Review manually before the next session."
-        return "Hold."
-
-
-def evaluate_position(risk: RiskManager, pos: SpreadPosition, today: date, earnings: EarningsProvider | None,
-                      notes: list[str] | None = None) -> PositionReport:
-    """Pure: no I/O. ``earnings=None`` disables the earnings check."""
-    info: EarningsInfo | None = earnings.get(pos.symbol) if earnings else None
-    alerts = risk.evaluate_alerts(pos, today, check_earnings=earnings is not None, earnings=info)
-    return PositionReport(pos, risk.evaluate_exit(pos, today), alerts, list(notes or []))
-
-
-def find_short_quote(chain: list[OptionQuote], pos: SpreadPosition) -> OptionQuote | None:
-    right = pos.spread_type.right
-    return next((q for q in chain if q.expiry == pos.expiry and q.right == right and q.strike == pos.short_strike),
-                None)
-
-
-def quote_delta(quote: OptionQuote, today: date) -> float | None:
-    """|delta| from the broker if present, else Black-Scholes from the quote's own IV, else None."""
-    if quote.delta is not None:
-        return abs(quote.delta)
-    if quote.iv and quote.dte(today) > 0:
-        return abs(bs_delta(quote.underlying_price, quote.strike, quote.dte(today) / 365.0, RISK_FREE,
-                            quote.iv, quote.right))
-    return None
-
-
-async def enrich_positions(broker: BrokerClient, positions: list[SpreadPosition], today: date,
-                           entry_deltas: dict[str, float]) -> list[tuple[SpreadPosition, list[str]]]:
-    """Attach underlying price, current short delta and entry delta. Any gap becomes a note, never a guess."""
-    out: list[tuple[SpreadPosition, list[str]]] = []
-    spots: dict[str, float] = {}
-    for pos in positions:
-        notes: list[str] = []
-        try:
-            if pos.symbol not in spots:
-                spots[pos.symbol] = await broker.get_underlying_price(pos.symbol)
-            pos = replace(pos, underlying_price=spots[pos.symbol])
-            dte = pos.dte(today)
-            chain = await broker.get_option_chain(pos.symbol, min_dte=max(dte - 1, 0), max_dte=dte + 1)
-            quote = find_short_quote(chain, pos)
-            delta = quote_delta(quote, today) if quote else None
-            if delta is None:
-                notes.append("short-leg delta unavailable: delta alert skipped")
-            pos = replace(pos, short_delta=delta)
-        except BrokerError as exc:
-            notes.append(f"market data unavailable ({exc}): delta/proximity checks skipped")
-        entry = entry_deltas.get(pos.key)
-        if entry is None:
-            notes.append(f"no entry delta journaled for {pos.key}: delta alert skipped")
-        out.append((replace(pos, entry_short_delta=entry), notes))
-    return out
 
 
 def format_report(reports: list[PositionReport], today: date) -> str:
