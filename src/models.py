@@ -88,6 +88,7 @@ class SpreadSignal:
     breakeven: float
     otm_pct: float           # distance of short strike from spot, fraction
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    long_delta: float | None = None  # absolute; lets portfolio code net the vertical's delta
 
     @property
     def key(self) -> str:
@@ -133,6 +134,7 @@ class SpreadPosition:
     short_delta: float | None = None        # current |delta| of the short leg
     entry_short_delta: float | None = None  # |delta| of the short leg when the trade was opened
     initial_contracts: int | None = None    # size when first seen (None = unknown/never scaled); drives scale-out
+    long_delta: float | None = None         # current |delta| of the long leg (for the vertical's net delta)
 
     @property
     def key(self) -> str:

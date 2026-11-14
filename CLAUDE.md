@@ -95,6 +95,12 @@ Dashboard API: `/api/health`, `/api/status`, `/api/signals`, `/api/positions`, `
 - `ScanService` blocks signals with unknown / in-window earnings, skips scans outside market hours and on stale quotes, captures
   `entry_short_delta` automatically (signal delta > first-scan delta; the manual journal overrides), and logs to SQLite.
   Closed-trade P&L is an ESTIMATE (last seen debit, modelled commissions); a position must be missing for 2 scans to count as closed.
+- Portfolio guard (`src/risk/portfolio.py`): net beta-weighted (SPY-equivalent) dollar delta of all open spreads vs
+  `MAX_NET_BETA_DELTA_PCT` of equity (default 100%). Signals that would ADD exposure past the cap are blocked, exposure-reducing
+  ones are allowed, incomplete data (missing delta/price/SPY quote) blocks (fail closed). Betas are rough static inputs (`BETAS`).
+  Candidates are each tested against the CURRENT book, not as a basket. `GET /api/portfolio`, alert `BETA_DELTA_LIMIT`.
+- Trade tagging: fixed vocabulary (`ALLOWED_TAGS`) + a 500-char note per trade via `POST /api/trades/tag` (dashboard "Tag"
+  button); `GET /api/breakdown?by=tag` aggregates P&L by tag. Old SQLite files are migrated in place (`_ADDED_COLUMNS`).
 - Optional scale-out (`SCALE_OUT_PROFIT_PCT`, needs >= 2 contracts): advisory only, lowers variance, does not raise expectancy,
   and is NOT risk-free (the remaining contracts keep their full max loss).
 

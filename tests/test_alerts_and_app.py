@@ -99,8 +99,11 @@ def _rebuild(s):
 
 # --- Alerts wired into ScanService and the dashboard -------------------------------------------------------------
 
-def aapl_legs(short=190, long=185, exp_days=30):
-    exp = TODAY + timedelta(days=exp_days)
+FRIDAY = TODAY + timedelta(days=(4 - TODAY.weekday()) % 7 or 7) + timedelta(weeks=4)  # an expiry the mock lists
+
+
+def aapl_legs(short=190, long=185):
+    exp = FRIDAY
     return [PositionLeg("AAPL", exp, short, "P", -1, 2.00, 1.80), PositionLeg("AAPL", exp, long, "P", 1, 1.00, 0.90)]
 
 
@@ -144,7 +147,7 @@ def test_alert_dispatch_respects_cooldown_across_scans():
 
 def test_delta_alert_uses_entry_delta_journal():
     exp_legs = aapl_legs(short=170, long=165)
-    key = f"AAPL:BULL_PUT:{TODAY + timedelta(days=30)}:170/165"
+    key = f"AAPL:BULL_PUT:{FRIDAY}:170/165"
     from src.risk.earnings import EarningsInfo, EarningsStatus, StaticEarningsProvider
     cal = StaticEarningsProvider({"AAPL": EarningsInfo("AAPL", TODAY + timedelta(days=400), EarningsStatus.CONFIRMED)})
     svc, _ = svc_with(exp_legs, earnings=cal, entry_deltas={key: 0.001})   # live delta will be >= 2x this tiny entry

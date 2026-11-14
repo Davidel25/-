@@ -4,6 +4,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+from src.risk.portfolio import DEFAULT_BETAS, parse_betas
+
 # Gateway API ports on a bare-metal install. The gnzsnz/ib-gateway Docker image
 # exposes 4003/4004 *inside* its network and forwards them to 4001/4002 on the host.
 IB_PORT_LIVE = 4001
@@ -48,6 +50,8 @@ class Settings:
     trade_db_path: str = ""              # SQLite trade log; empty -> in-memory (lost on restart)
     commission_per_contract: float = 0.65
     allowed_weekdays: tuple[int, ...] | None = None  # entry-day filter, 0 = Monday (off by default: validate first)
+    betas: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_BETAS))  # beta to SPY by symbol
+    max_net_beta_delta_pct: float = 1.0  # cap on net beta-weighted delta as a fraction of equity
     scale_out_profit_pct: float = 0.0    # 0 = off; 0.30 / 0.40 recommends closing half of a >= 2 contract position
     earnings_file: str = ""         # JSON earnings calendar (see src/risk/earnings.py); empty -> ETFs only
     entry_deltas_file: str = ""     # JSON journal {position key: entry |delta|} for the delta alert
@@ -87,6 +91,8 @@ class Settings:
             trade_db_path=os.getenv("TRADE_DB_PATH", "data/trades.db"),
             commission_per_contract=float(os.getenv("COMMISSION_PER_CONTRACT", "0.65")),
             allowed_weekdays=_weekdays("ALLOWED_WEEKDAYS"),
+            betas={**DEFAULT_BETAS, **parse_betas(os.getenv("BETAS", ""))},
+            max_net_beta_delta_pct=float(os.getenv("MAX_NET_BETA_DELTA_PCT", "1.0")),
             scale_out_profit_pct=float(os.getenv("SCALE_OUT_PROFIT_PCT", "0")),
             earnings_file=os.getenv("EARNINGS_FILE", ""),
             entry_deltas_file=os.getenv("ENTRY_DELTAS_FILE", ""),

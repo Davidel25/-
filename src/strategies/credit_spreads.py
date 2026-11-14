@@ -164,6 +164,7 @@ def scan_spreads(
                     pop=round(1 - abs(short.delta), 4),
                     breakeven=round(k - credit if bull else k + credit, 2),
                     otm_pct=round(abs(spot - k) / spot, 4),
+                    long_delta=round(abs(long.delta), 4) if long.delta is not None else None,
                 ))
     signals.sort(key=rank_key(cfg), reverse=True)
     return signals[: cfg.top_n_per_symbol]

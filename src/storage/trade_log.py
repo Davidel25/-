@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS positions (
     status TEXT NOT NULL DEFAULT 'OPEN', closed_at TEXT, exit_debit REAL, exit_reason TEXT,
     commission REAL, gross_pnl REAL, net_pnl REAL, pnl_is_estimate INTEGER NOT NULL DEFAULT 1,
     missing_scans INTEGER NOT NULL DEFAULT 0, initial_contracts INTEGER, opened_dte INTEGER,
-    opened_dte_bucket TEXT, opened_weekday INTEGER);
+    opened_dte_bucket TEXT, opened_weekday INTEGER, tags TEXT, notes TEXT);
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, key TEXT, type TEXT NOT NULL, detail TEXT);
 CREATE TABLE IF NOT EXISTS pnl_snapshots (
@@ -41,6 +41,20 @@ CREATE TABLE IF NOT EXISTS pnl_snapshots (
     open_positions INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_positions_status ON positions (status);
 """
+
+
+# A short, fixed vocabulary keeps tags countable (free-form tags cannot be aggregated). Put detail in the notes.
+ALLOWED_TAGS = ("earnings_gap", "macro_selloff", "macro_rally", "stop_hit", "profit_target", "dte_exit", "scale_out",
+                "rolled", "scratch", "manual_exit", "data_issue", "other")
+MAX_NOTES = 500
+
+# Columns added after the first schema version: applied to databases created by older versions.
+_ADDED_COLUMNS = {
+    "signals": {"dte": "INTEGER", "dte_bucket": "TEXT", "weekday": "INTEGER"},
+    "positions": {"missing_scans": "INTEGER NOT NULL DEFAULT 0", "initial_contracts": "INTEGER",
+                  "opened_dte": "INTEGER", "opened_dte_bucket": "TEXT", "opened_weekday": "INTEGER",
+                  "tags": "TEXT", "notes": "TEXT"},
+}
 
 
 @dataclass(frozen=True)
@@ -75,6 +89,14 @@ class TradeLog:
             if target != ":memory:":
                 self._db.execute("PRAGMA journal_mode=WAL")
             self._db.executescript(SCHEMA)
+            self._migrate()
+
+    def _migrate(self) -> None:
+        for table, cols in _ADDED_COLUMNS.items():
+            have = {r["name"] for r in self._db.execute(f"PRAGMA table_info({table})")}
+            for name, decl in cols.items():
+                if name not in have:
+                    self._db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")  # noqa: S608
 
     def close(self) -> None:
         with self._lock:
@@ -201,7 +223,31 @@ class TradeLog:
             sql, args = sql + " AND substr(closed_at,1,10) <= ?", args + [end]
         with self._lock:
             rows = self._db.execute(sql + " ORDER BY closed_at DESC LIMIT ?", (*args, limit))
-            return [dict(r) for r in rows]
+            return [self._public(r) for r in rows]
+
+    @staticmethod
+    def _public(row: sqlite3.Row) -> dict:
+        d = dict(row)
+        d["tags"] = json.loads(d["tags"]) if d.get("tags") else []
+        return d
+
+    def set_tags(self, key: str, tags: list[str], notes: str | None = None) -> dict:
+        """Tag a trade with values from :data:`ALLOWED_TAGS` and attach a free-text note. Replaces any previous
+        tags/notes. Raises ValueError for unknown tags or an over-long note, KeyError for an unknown trade."""
+        clean = list(dict.fromkeys(t.strip().lower() for t in tags if t and t.strip()))
+        bad = [t for t in clean if t not in ALLOWED_TAGS]
+        if bad:
+            raise ValueError(f"unknown tag(s) {bad}; allowed: {', '.join(ALLOWED_TAGS)}")
+        note = (notes or "").strip() or None
+        if note and len(note) > MAX_NOTES:
+            raise ValueError(f"notes are limited to {MAX_NOTES} characters")
+        with self._lock, self._db:
+            cur = self._db.execute("UPDATE positions SET tags=?, notes=? WHERE key=?",
+                                   (json.dumps(clean) if clean else None, note, key))
+            if cur.rowcount != 1:
+                raise KeyError(key)
+            self._event(_ts(None), key, "TRADE_TAGGED", {"tags": clean, "has_notes": bool(note)})
+            return self._public(self._db.execute("SELECT * FROM positions WHERE key=?", (key,)).fetchone())
 
     def record_snapshot(self, day: date, unrealized_bull_put: float, unrealized_bear_call: float,
                         open_positions: int, now: datetime | None = None) -> None:
@@ -235,15 +281,28 @@ class TradeLog:
     def breakdown(self, by: str = "dte_bucket") -> list[dict]:
         """Closed-trade performance grouped by entry DTE bucket or entry weekday (0 = Monday): the data needed to
         decide whether a weekday / DTE-bucket filter actually helps. Estimates, see the module docstring."""
+        if by == "tag":
+            return self._tag_breakdown()
         col = {"dte_bucket": "opened_dte_bucket", "weekday": "opened_weekday"}.get(by)
         if col is None:
-            raise ValueError("by must be 'dte_bucket' or 'weekday'")
+            raise ValueError("by must be 'dte_bucket', 'weekday' or 'tag'")
         with self._lock:
             rows = self._db.execute(
                 f"SELECT {col} g, COUNT(*) n, SUM(net_pnl > 0) w, SUM(net_pnl) net, AVG(net_pnl) avg"  # noqa: S608
                 f" FROM positions WHERE status='CLOSED' AND {col} IS NOT NULL GROUP BY {col} ORDER BY {col}")
             return [{"group": r["g"], "trades": r["n"], "wins": int(r["w"] or 0), "net_pnl": round(r["net"] or 0, 2),
                      "avg_net_pnl": round(r["avg"] or 0, 2)} for r in rows]
+
+    def _tag_breakdown(self) -> list[dict]:
+        """A trade with several tags counts once under each; untagged trades are grouped as 'untagged'."""
+        with self._lock:
+            rows = self._db.execute("SELECT tags, net_pnl FROM positions WHERE status='CLOSED'").fetchall()
+        agg: dict[str, list[float]] = {}
+        for r in rows:
+            for tag in (json.loads(r["tags"]) if r["tags"] else ["untagged"]):
+                agg.setdefault(tag, []).append(r["net_pnl"] or 0.0)
+        return [{"group": g, "trades": len(v), "wins": sum(x > 0 for x in v), "net_pnl": round(sum(v), 2),
+                 "avg_net_pnl": round(sum(v) / len(v), 2)} for g, v in sorted(agg.items())]
 
     def events(self, limit: int = 100) -> list[dict]:
         with self._lock:

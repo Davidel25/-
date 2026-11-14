@@ -7,6 +7,7 @@ from enum import StrEnum
 
 from src.models import PositionLeg, SpreadPosition, SpreadSignal, SpreadType
 from src.risk.earnings import EarningsCheck, EarningsInfo, classify_earnings
+from src.risk.portfolio import PortfolioSnapshot
 
 
 @dataclass
@@ -20,6 +21,10 @@ class RiskLimits:
     close_at_dte: int = 14                 # gamma-risk exit
     delta_alert_multiple: float = 2.0      # warn when short |delta| >= 2x its entry value
     strike_proximity_pct: float = 0.01     # warn when underlying is within 1% of (or through) the short strike
+    # Net beta-weighted (SPY-equivalent) dollar delta as a fraction of equity. 1.0 = the open spreads together act like
+    # holding at most 100% of the account in SPY, long or short. Applies to new signals and to the portfolio alert.
+    max_net_beta_delta_pct: float = 1.0
+    beta_delta_warn_fraction: float = 0.8  # warn once this share of the cap is used
     # Optional partial exit. OFF by default (None): it needs >= 2 contracts and, per the simulation in the strategy
     # review, it lowers variance slightly but does NOT raise expectancy and is NOT "risk-free" (the remaining
     # contracts keep their full max loss). Typical values: 0.30 or 0.40.
@@ -48,6 +53,7 @@ class AlertType(StrEnum):
     STRIKE_PROXIMITY = "STRIKE_PROXIMITY"
     EARNINGS_RISK_ALERT = "EARNINGS_RISK_ALERT"
     EARNINGS_UNKNOWN = "EARNINGS_UNKNOWN"
+    BETA_DELTA_LIMIT = "BETA_DELTA_LIMIT"
 
 
 class Severity(StrEnum):
@@ -68,9 +74,13 @@ class RiskManager:
 
     def check_signal(self, signal: SpreadSignal, positions: list[SpreadPosition],
                      equity: float, contracts: int = 1, *, check_earnings: bool = False,
-                     earnings: EarningsInfo | None = None, today: date | None = None) -> RiskDecision:
+                     earnings: EarningsInfo | None = None, today: date | None = None,
+                     portfolio: PortfolioSnapshot | None = None, signal_dollar_delta: float = 0.0) -> RiskDecision:
         """Pre-trade gate. With ``check_earnings=True`` a candidate is rejected unless its earnings
-        status is CLEAR (unknown/unconfirmed dates are rejected too: fail safe)."""
+        status is CLEAR (unknown/unconfirmed dates are rejected too: fail safe). With ``portfolio`` given, the
+        candidate (``signal_dollar_delta`` per contract, beta-weighted) is also rejected if it would push net
+        beta-weighted delta past the cap; trades that reduce exposure are always allowed, and an incomplete
+        snapshot rejects (fail closed)."""
         lim, reasons = self.limits, []
         risk = signal.max_loss * contracts
         open_risk = sum(p.max_loss for p in positions)
@@ -88,7 +98,40 @@ class RiskManager:
             check = classify_earnings(earnings, signal.expiry, today or date.today())
             if check is not EarningsCheck.CLEAR:
                 reasons.append(f"earnings check {check.value} for {signal.symbol} before {signal.expiry}")
+        if portfolio is not None:
+            reasons.extend(self._beta_reasons(portfolio, signal_dollar_delta * contracts, equity))
         return RiskDecision(not reasons, reasons)
+
+    def _beta_reasons(self, snap: PortfolioSnapshot, added: float, equity: float) -> list[str]:
+        if not snap.complete:
+            gaps = f" (no data for {', '.join(snap.missing)})" if snap.missing else ""
+            return [f"beta-weighted delta unavailable{gaps}"]
+        projected = snap.net_dollar_delta + added
+        pct = projected / equity if equity > 0 else 0.0
+        if abs(pct) > self.limits.max_net_beta_delta_pct and abs(projected) > abs(snap.net_dollar_delta):
+            return [f"beta-weighted delta {pct:+.0%} of equity would exceed the "
+                    f"{self.limits.max_net_beta_delta_pct:.0%} cap"]
+        return []
+
+    def evaluate_portfolio(self, snap: PortfolioSnapshot) -> list[RiskAlert]:
+        """Portfolio-level advisory alerts (never trades)."""
+        lim, pct = self.limits, snap.pct_of_equity
+        if not snap.complete:
+            if snap.exposures or snap.missing:
+                return [RiskAlert(AlertType.BETA_DELTA_LIMIT, Severity.WARN,
+                                  "portfolio beta-weighted delta is incomplete (missing price, delta or SPY quote): "
+                                  "check manually")]
+            return []
+        if pct is None or abs(pct) <= lim.beta_delta_warn_fraction * lim.max_net_beta_delta_pct:
+            return []
+        way = "long" if pct > 0 else "short"
+        used = abs(pct) / lim.max_net_beta_delta_pct
+        high = abs(pct) > lim.max_net_beta_delta_pct
+        return [RiskAlert(
+            AlertType.BETA_DELTA_LIMIT, Severity.HIGH if high else Severity.WARN,
+            f"net beta-weighted delta is {way} ${abs(snap.net_dollar_delta):,.0f} ({abs(pct):.0%} of equity, "
+            f"{used:.0%} of the {lim.max_net_beta_delta_pct:.0%} cap): "
+            + ("over the cap - reduce or hedge the directional exposure" if high else "approaching the cap"))]
 
     def evaluate_exit(self, pos: SpreadPosition, today: date | None = None) -> ExitAction:
         lim = self.limits

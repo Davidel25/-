@@ -6,16 +6,24 @@ import contextlib
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, Field
 
 from src.alerts.notifiers import AlertDispatcher, build_notifiers
 from src.broker.factory import create_broker
 from src.config import Settings
 from src.service import ScanService
+from src.storage.trade_log import ALLOWED_TAGS, MAX_NOTES
 
 INDEX_HTML = (Path(__file__).parent / "index.html").read_text()
 DATE_RE = r"^\d{4}-\d{2}-\d{2}$"
+
+
+class TagUpdate(BaseModel):
+    key: str = Field(min_length=1, max_length=200)
+    tags: list[str] = Field(default_factory=list, max_length=len(ALLOWED_TAGS))
+    notes: str | None = Field(default=None, max_length=MAX_NOTES)
 
 
 def _performance(service: ScanService) -> dict:
@@ -84,10 +92,29 @@ def create_app(service: ScanService | None = None, settings: Settings | None = N
         """Daily open-position (unrealized) P&L snapshots by strategy, plus the realized summary."""
         return {"snapshots": service.trade_log.snapshots(start, end), "performance": _performance(service)}
 
+    @app.get("/api/tags")
+    def tags() -> dict:
+        return {"tags": list(ALLOWED_TAGS), "max_notes": MAX_NOTES}
+
+    @app.post("/api/trades/tag")
+    def tag_trade(body: TagUpdate) -> dict:
+        """Tag / annotate a trade for later analysis. Writes only to the local journal; no broker access."""
+        try:
+            return service.trade_log.set_tags(body.key, body.tags, body.notes)
+        except KeyError:
+            raise HTTPException(404, f"unknown trade {body.key}") from None
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+
     @app.get("/api/breakdown")
-    def breakdown(by: str = Query("dte_bucket", pattern="^(dte_bucket|weekday)$")) -> list[dict]:
-        """Closed-trade results by entry DTE bucket or entry weekday (0 = Monday): evidence for the timing filters."""
+    def breakdown(by: str = Query("dte_bucket", pattern="^(dte_bucket|weekday|tag)$")) -> list[dict]:
+        """Closed-trade results by entry DTE bucket, entry weekday (0 = Monday) or tag: evidence for the filters."""
         return service.trade_log.breakdown(by)
+
+    @app.get("/api/portfolio")
+    def portfolio() -> dict:
+        """Beta-weighted (SPY-equivalent) delta of the open spreads versus the cap."""
+        return state.portfolio
 
     @app.get("/api/diagnostics")
     def diagnostics() -> dict:

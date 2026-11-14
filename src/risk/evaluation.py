@@ -71,6 +71,11 @@ def find_short_quote(chain: list[OptionQuote], pos: SpreadPosition) -> OptionQuo
                 None)
 
 
+def find_long_quote(chain: list[OptionQuote], pos: SpreadPosition) -> OptionQuote | None:
+    right = pos.spread_type.right
+    return next((q for q in chain if q.expiry == pos.expiry and q.right == right and q.strike == pos.long_strike), None)
+
+
 def quote_delta(quote: OptionQuote, today: date) -> float | None:
     """|delta| from the broker if present, else Black-Scholes from the quote's own IV, else None."""
     if quote.delta is not None:
@@ -98,7 +103,8 @@ async def enrich_positions(broker: BrokerClient, positions: list[SpreadPosition]
             delta = quote_delta(quote, today) if quote else None
             if delta is None:
                 notes.append("short-leg delta unavailable: delta alert skipped")
-            pos = replace(pos, short_delta=delta)
+            long_q = find_long_quote(chain, pos)
+            pos = replace(pos, short_delta=delta, long_delta=quote_delta(long_q, today) if long_q else None)
         except BrokerError as exc:
             notes.append(f"market data unavailable ({exc}): delta/proximity checks skipped")
         entry = entry_deltas.get(pos.key)

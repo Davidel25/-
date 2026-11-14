@@ -20,6 +20,7 @@ from src.models import OptionQuote, SpreadPosition, SpreadSignal, SpreadType
 from src.risk.earnings import EarningsProvider, JsonFile, StaticEarningsProvider
 from src.risk.evaluation import PositionReport, Status, enrich_positions, evaluate_position
 from src.risk.manager import ExitAction, RiskLimits, RiskManager, pair_legs
+from src.risk.portfolio import PortfolioSnapshot, build_snapshot, signal_dollar_delta
 from src.risk.report import load_entry_deltas
 from src.storage.trade_log import TradeLog
 from src.strategies.credit_spreads import ScannerConfig, rank_key, scan_all, schedule_gate, underlying_gate
@@ -35,6 +36,7 @@ class AppState:
     signals: list[dict] = field(default_factory=list)
     positions: list[dict] = field(default_factory=list)
     alerts: list[dict] = field(default_factory=list)   # flattened per-position alerts for the dashboard
+    portfolio: dict = field(default_factory=dict)      # beta-weighted delta snapshot (see src.risk.portfolio)
     skipped: list[dict] = field(default_factory=list)  # symbols skipped this scan (stale data, edge filters, ...)
     blocked: list[dict] = field(default_factory=list)  # candidates rejected by the earnings / risk gate
     rejected: int = 0
@@ -60,7 +62,11 @@ class ScanService:
             JsonFile(settings.earnings_file) if settings.earnings_file else StaticEarningsProvider())
         self._journal = entry_deltas  # manual overrides; None -> read settings.entry_deltas_file each cycle
         self.trade_log = trade_log or TradeLog(settings.trade_db_path or ":memory:", settings.commission_per_contract)
-        self.risk = risk or RiskManager(RiskLimits(scale_out_profit_pct=settings.scale_out_profit_pct or None))
+        self.risk = risk or RiskManager(RiskLimits(
+            scale_out_profit_pct=settings.scale_out_profit_pct or None,
+            max_net_beta_delta_pct=settings.max_net_beta_delta_pct))
+        self.betas = dict(settings.betas)
+        self._snapshot: PortfolioSnapshot | None = None
         self.cfg = scanner_cfg or (ScannerConfig.disciplined() if settings.disciplined_scanner else ScannerConfig())
         if settings.allowed_weekdays is not None and scanner_cfg is None:
             self.cfg = replace(self.cfg, allowed_weekdays=settings.allowed_weekdays)
@@ -89,7 +95,7 @@ class ScanService:
             await self._ensure_connected()
             equity = await self.broker.get_account_equity() or self.settings.account_equity
             self.state.equity = equity
-            positions = await self.check_positions()
+            positions = await self.check_positions(equity)
 
             approved: list[SpreadSignal] = []
             rejected, skipped, blocked = 0, [], []
@@ -119,9 +125,11 @@ class ScanService:
                             skipped.append({"symbol": symbol, "reason": f"{st.value}: " + "; ".join(why)})
                 info = self.earnings.get(symbol)
                 for sig in signals:
+                    # Candidates are alternatives, not a basket: each is tested against the CURRENT portfolio.
                     decision = self.risk.check_signal(
                         sig, positions, equity, check_earnings=self.settings.require_earnings_clear,
-                        earnings=info, today=today)
+                        earnings=info, today=today, portfolio=self._snapshot,
+                        signal_dollar_delta=signal_dollar_delta(sig, self.betas))
                     if decision.approved:
                         approved.append(sig)
                     else:
@@ -164,7 +172,16 @@ class ScanService:
             log.warning("%s", exc)
             return {}
 
-    async def check_positions(self) -> list[SpreadPosition]:
+    async def _portfolio(self, positions: list[SpreadPosition], equity: float) -> PortfolioSnapshot:
+        """Beta-weighted delta snapshot. A missing SPY quote makes it incomplete, which blocks new signals."""
+        try:
+            spy = await self.broker.get_underlying_price("SPY")
+        except BrokerError as exc:
+            log.warning("no SPY price for beta-weighted delta: %s", exc)
+            spy = None
+        return build_snapshot(positions, self.betas, spy, equity, self.risk.limits.max_net_beta_delta_pct)
+
+    async def check_positions(self, equity: float | None = None) -> list[SpreadPosition]:
         """Pair legs, enrich with spot/delta, capture entry delta, run exit rules + alerts, notify and log.
         Read-only: never trades."""
         now, today = self.clock(), date.today()
@@ -189,16 +206,26 @@ class ScanService:
         self.trade_log.close_missing({r.position.key for r in reports}, now)
         pnl = {t: sum(r.position.unrealized_pnl for r in reports if r.position.spread_type is t) for t in SpreadType}
         self.trade_log.record_snapshot(today, pnl[SpreadType.BULL_PUT], pnl[SpreadType.BEAR_CALL], len(reports), now)
+        final = [r.position for r in reports]
+        eq = equity or self.state.equity or self.settings.account_equity
+        snap = self._snapshot = await self._portfolio(final, eq)
+        self.state.portfolio = snap.to_dict()
+        dollars = {e.key: e.dollar_delta for e in snap.exposures}
         self.state.positions, self.state.alerts = [], []
         for r in reports:
-            await self._publish(r)
-        return [r.position for r in reports]
+            await self._publish(r, dollars.get(r.position.key))
+        for a in self.risk.evaluate_portfolio(snap):
+            self.state.alerts.append({"position": "PORTFOLIO", "type": a.type.value, "severity": a.severity.value,
+                                      "message": a.message})
+            await self.dispatcher.dispatch(f"portfolio:{a.type.value}:{a.severity.value}",
+                                           f"ALERT [{a.severity.value}] {a.type.value}: {a.message}")
+        return final
 
-    async def _publish(self, r: PositionReport) -> None:
+    async def _publish(self, r: PositionReport, beta_delta_dollars: float | None = None) -> None:
         pos = r.position
         self.state.positions.append({
             **pos.to_dict(), "action": r.action.value, "status": r.status.value, "recommendation": r.recommendation,
-            "scale_out_contracts": r.scale_out_contracts,
+            "scale_out_contracts": r.scale_out_contracts, "beta_delta_dollars": beta_delta_dollars,
             "alerts": [{"type": a.type.value, "severity": a.severity.value, "message": a.message} for a in r.alerts],
             "notes": r.notes,
         })
