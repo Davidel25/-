@@ -20,6 +20,11 @@ class RiskLimits:
     close_at_dte: int = 14                 # gamma-risk exit
     delta_alert_multiple: float = 2.0      # warn when short |delta| >= 2x its entry value
     strike_proximity_pct: float = 0.01     # warn when underlying is within 1% of (or through) the short strike
+    # Optional partial exit. OFF by default (None): it needs >= 2 contracts and, per the simulation in the strategy
+    # review, it lowers variance slightly but does NOT raise expectancy and is NOT "risk-free" (the remaining
+    # contracts keep their full max loss). Typical values: 0.30 or 0.40.
+    scale_out_profit_pct: float | None = None
+    scale_out_fraction: float = 0.5        # share of contracts to close at the scale-out trigger
 
 
 @dataclass
@@ -33,6 +38,7 @@ class ExitAction(StrEnum):
     TAKE_PROFIT = "TAKE_PROFIT"
     STOP_LOSS = "STOP_LOSS"
     CLOSE_DTE = "CLOSE_DTE"
+    SCALE_OUT = "SCALE_OUT"  # advisory: close part of the position, let the rest run to the 50% target / DTE exit
 
 
 class AlertType(StrEnum):
@@ -92,7 +98,21 @@ class RiskManager:
             return ExitAction.STOP_LOSS
         if pos.dte(today) <= lim.close_at_dte:
             return ExitAction.CLOSE_DTE
+        if lim.scale_out_profit_pct is not None and pos.profit_pct >= lim.scale_out_profit_pct \
+                and self.scale_out_contracts(pos) > 0:
+            return ExitAction.SCALE_OUT
         return ExitAction.HOLD
+
+    def scale_out_contracts(self, pos: SpreadPosition) -> int:
+        """How many contracts to close at the scale-out trigger: 0 if the rule is off, the position is a single
+        contract, or it has already been scaled out (current size below its initial size); otherwise
+        ``scale_out_fraction`` of the contracts, at least 1 and always leaving at least 1 open."""
+        lim = self.limits
+        if lim.scale_out_profit_pct is None or pos.contracts < 2:
+            return 0
+        if pos.initial_contracts is not None and pos.contracts < pos.initial_contracts:
+            return 0
+        return min(pos.contracts - 1, max(1, int(pos.contracts * lim.scale_out_fraction)))
 
     def evaluate_alerts(self, pos: SpreadPosition, today: date | None = None, *, check_earnings: bool = False,
                         earnings: EarningsInfo | None = None) -> list[RiskAlert]:

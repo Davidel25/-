@@ -29,6 +29,7 @@ class PositionReport:
     action: ExitAction
     alerts: list[RiskAlert]
     notes: list[str] = field(default_factory=list)  # data gaps (fail-safe: they force REVIEW)
+    scale_out_contracts: int = 0                    # contracts to close when action is SCALE_OUT
 
     @property
     def status(self) -> Status:
@@ -38,6 +39,10 @@ class PositionReport:
 
     @property
     def recommendation(self) -> str:
+        if self.action is ExitAction.SCALE_OUT:
+            n, total = self.scale_out_contracts, self.position.contracts
+            return (f"Scale out: close {n} of {total} contracts at the working limit and let the other "
+                    f"{total - n} run to the 50% target or the DTE exit. Remaining contracts keep full max loss.")
         if self.action is ExitAction.TAKE_PROFIT:
             return "Take profit: buy the spread back at the working limit."
         if self.action is ExitAction.STOP_LOSS:
@@ -56,7 +61,8 @@ def evaluate_position(risk: RiskManager, pos: SpreadPosition, today: date, earni
     """Pure: no I/O. ``earnings=None`` disables the earnings check."""
     info: EarningsInfo | None = earnings.get(pos.symbol) if earnings else None
     alerts = risk.evaluate_alerts(pos, today, check_earnings=earnings is not None, earnings=info)
-    return PositionReport(pos, risk.evaluate_exit(pos, today), alerts, list(notes or []))
+    return PositionReport(pos, risk.evaluate_exit(pos, today), alerts, list(notes or []),
+                          risk.scale_out_contracts(pos))
 
 
 def find_short_quote(chain: list[OptionQuote], pos: SpreadPosition) -> OptionQuote | None:

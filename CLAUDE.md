@@ -23,7 +23,9 @@ src/
   risk/                manager.py (RiskLimits, RiskManager, pair_legs, ExitAction, AlertType/RiskAlert),
                        earnings.py (EarningsProvider, classify_earnings, JsonFile calendar), report.py (read-only CLI)
   alerts/              notifiers.py (Log / Telegram / Webhook, AlertDispatcher with cooldown)
-  dashboard/           app.py (FastAPI factory) + index.html
+  market_hours.py      US session / NYSE holiday guard
+  storage/             trade_log.py (SQLite: signals, positions, auto entry delta, P&L snapshots, breakdowns)
+  dashboard/           app.py (FastAPI factory) + index.html (auto-refresh, filters, CSV export, P&L chart, toasts)
 tests/                 pytest; everything runs against MockBroker, no network
 ```
 Dependency direction: `dashboard -> service -> (strategies, risk, alerts, data) -> broker.base`.
@@ -85,9 +87,19 @@ Dashboard API: `/api/health`, `/api/status`, `/api/signals`, `/api/positions`, `
 6. Pin the gateway image to a specific tag before relying on it, and verify env var names in the
    gnzsnz/ib-gateway-docker docs for that tag.
 
+## Edge filters and guards (all read-only)
+- `ScannerConfig.disciplined()` bundles: credit >= 0.60, ROC >= 20% natural, bid/ask <= 5% and <= $0.05 per leg, IV/HV >= 1.1,
+  trend alignment (Bull Put above SMA50, Bear Call below), term-structure slope >= +1%, 25d put skew <= 10 vol pts (Bull Puts),
+  DTE 30-50 with 35-45 ranked first. `allowed_weekdays` (entry days) is off by default: the filter exists, validate it with
+  `GET /api/breakdown?by=weekday|dte_bucket` before enabling. Missing data always fails closed.
+- `ScanService` blocks signals with unknown / in-window earnings, skips scans outside market hours and on stale quotes, captures
+  `entry_short_delta` automatically (signal delta > first-scan delta; the manual journal overrides), and logs to SQLite.
+  Closed-trade P&L is an ESTIMATE (last seen debit, modelled commissions); a position must be missing for 2 scans to count as closed.
+- Optional scale-out (`SCALE_OUT_PROFIT_PCT`, needs >= 2 contracts): advisory only, lowers variance, does not raise expectancy,
+  and is NOT risk-free (the remaining contracts keep their full max loss).
+
 ## Known gaps / next steps
-- No market-hours calendar: scans run on schedule even when the market is closed (quotes may be stale/empty).
-- Dashboard state is in-memory (resets on restart); add SQLite/Postgres for signal history and P&L tracking.
+- Dashboard live state is in-memory; trade history / P&L snapshots persist in SQLite (`TRADE_DB_PATH`). Fills are not read from the broker, so P&L is estimated.
 - No dashboard authentication, and `pair_legs` only recognises simple verticals (no iron condors / rolled legs).
 - IV rank / earnings-date / ex-dividend filters are not implemented; add them in `strategies/` before trusting signals.
 - Black-Scholes fallback delta ignores dividends and American exercise; prefer broker model Greeks.

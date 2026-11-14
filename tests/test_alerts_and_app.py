@@ -79,7 +79,7 @@ def test_dashboard_endpoints():
         assert st["broker"] == "mock" and st["signals"] > 0
         assert client.get("/api/signals").json()[0]["symbol"] == "SPY"
         assert client.get("/api/positions").json() == []
-        assert "Credit Spread Scanner" in client.get("/").text
+        assert "Credit Spread Monitor" in client.get("/").text
 
 
 def test_format_signal():
@@ -175,6 +175,6 @@ def test_entry_delta_journal_is_read_from_settings_path(tmp_path):
     f.write_text('{"X:BULL_PUT:2026-01-01:1/0": 0.2}')
     svc = ScanService(Settings(broker="mock", entry_deltas_file=str(f), scan_enabled=False), MockBroker(today=TODAY),
                       AlertDispatcher([]))
-    assert svc._entry_deltas_now() == {"X:BULL_PUT:2026-01-01:1/0": 0.2}
+    assert svc._journal_now() == {"X:BULL_PUT:2026-01-01:1/0": 0.2}
     f.write_text("not json")
-    assert svc._entry_deltas_now() == {}                      # bad journal never crashes a scan
+    assert svc._journal_now() == {}                      # bad journal never crashes a scan

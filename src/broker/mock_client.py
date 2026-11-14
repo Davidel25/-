@@ -4,7 +4,8 @@ Option prices come from Black-Scholes with a mild put skew so chains look realis
 from __future__ import annotations
 
 import math
-from datetime import date, timedelta
+from collections.abc import Callable
+from datetime import UTC, date, datetime, timedelta
 
 from src.broker.base import BrokerClient, BrokerError, expiries_in_window
 from src.data.greeks import bs_delta, bs_price
@@ -22,6 +23,8 @@ class MockBroker(BrokerClient):
         today: date | None = None,
         base_iv: float = 0.22,
         fail_connect: bool = False,
+        closes: dict[str, list[float]] | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.prices = dict(prices or DEFAULT_PRICES)
         self.positions = list(positions or [])
@@ -29,6 +32,8 @@ class MockBroker(BrokerClient):
         self.today = today or date.today()
         self.base_iv = base_iv
         self.fail_connect = fail_connect
+        self.closes = dict(closes or {})  # per-symbol daily closes; default is a flat zig-zag (see get_daily_closes)
+        self.clock = clock or (lambda: datetime.now(UTC))  # quote timestamps come from here
         self._connected = False
         self.calls: list[str] = []  # lets tests assert on interactions
 
@@ -84,10 +89,20 @@ class MockBroker(BrokerClient):
                             bid=round(max(mid - half, 0.0), 2), ask=round(mid + half, 2),
                             underlying_price=spot,
                             delta=round(bs_delta(spot, k, t, 0.045, iv, right), 4),
-                            iv=round(iv, 4), volume=500, open_interest=2000,
+                            iv=round(iv, 4), volume=500, open_interest=2000, quote_time=self.clock(),
                         )
                     )
         return quotes
+
+    async def get_daily_closes(self, symbol: str, days: int = 90) -> list[float]:
+        """Deterministic default: alternating +/-1.1% days around spot (HV ~ 18%, SMA50 ~ spot)."""
+        self._require()
+        if symbol in self.closes:
+            return self.closes[symbol][-days:]
+        if symbol not in self.prices:
+            raise BrokerError(f"unknown symbol {symbol}")
+        spot = self.prices[symbol]
+        return [spot * (1.011 if (days - i) % 2 else 1 / 1.011) for i in range(days)][:-1] + [spot]
 
     async def get_option_positions(self) -> list[PositionLeg]:
         self._require()

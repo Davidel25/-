@@ -8,6 +8,26 @@ from enum import StrEnum
 CONTRACT_MULTIPLIER = 100
 
 
+def dte_bucket(dte: int) -> str:
+    """Coarse expiry bucket used for filtering preferences and for trade-log analysis."""
+    if dte < 25:
+        return "<25"
+    if dte < 30:
+        return "25-29"
+    if dte < 35:
+        return "30-34"
+    if dte <= 45:
+        return "35-45"
+    return "46+" if dte <= 50 else ">50"
+
+
+def position_key(symbol: str, spread_type: SpreadType | str, expiry: date, short_strike: float,
+                 long_strike: float) -> str:
+    """One canonical id for a spread, shared by signals, positions, the entry-delta journal and the trade log."""
+    st = spread_type.value if isinstance(spread_type, SpreadType) else spread_type
+    return f"{symbol}:{st}:{expiry}:{short_strike:g}/{long_strike:g}"
+
+
 class SpreadType(StrEnum):
     BULL_PUT = "BULL_PUT"    # short put + long lower put  (bullish, credit)
     BEAR_CALL = "BEAR_CALL"  # short call + long higher call (bearish, credit)
@@ -32,6 +52,7 @@ class OptionQuote:
     iv: float | None = None
     volume: int = 0
     open_interest: int = 0
+    quote_time: datetime | None = None  # when the broker last updated this quote (tz-aware); None = unknown
 
     @property
     def mid(self) -> float:
@@ -70,7 +91,7 @@ class SpreadSignal:
 
     @property
     def key(self) -> str:
-        return f"{self.symbol}:{self.spread_type.value}:{self.expiry}:{self.short_strike}/{self.long_strike}"
+        return position_key(self.symbol, self.spread_type, self.expiry, self.short_strike, self.long_strike)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -111,11 +132,19 @@ class SpreadPosition:
     underlying_price: float | None = None
     short_delta: float | None = None        # current |delta| of the short leg
     entry_short_delta: float | None = None  # |delta| of the short leg when the trade was opened
+    initial_contracts: int | None = None    # size when first seen (None = unknown/never scaled); drives scale-out
 
     @property
     def key(self) -> str:
         """Stable identifier, also used as the entry-delta journal key."""
-        return f"{self.symbol}:{self.spread_type.value}:{self.expiry}:{self.short_strike:g}/{self.long_strike:g}"
+        return position_key(self.symbol, self.spread_type, self.expiry, self.short_strike, self.long_strike)
+
+    @property
+    def delta_ratio(self) -> float | None:
+        """Current short |delta| as a multiple of its entry value (>= 2 trips the delta alert)."""
+        if self.short_delta is None or not self.entry_short_delta:
+            return None
+        return abs(self.short_delta) / abs(self.entry_short_delta)
 
     @property
     def distance_to_short_pct(self) -> float | None:
@@ -159,5 +188,6 @@ class SpreadPosition:
             dte=self.dte(),
             key=self.key,
             distance_to_short_pct=self.distance_to_short_pct,
+            delta_ratio=self.delta_ratio,
         )
         return d

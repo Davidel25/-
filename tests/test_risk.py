@@ -1,4 +1,7 @@
+from dataclasses import replace
 from datetime import date, timedelta
+
+import pytest
 
 from src.models import PositionLeg, SpreadPosition, SpreadSignal, SpreadType
 from src.risk.manager import AlertType, ExitAction, RiskLimits, RiskManager, Severity, pair_legs
@@ -215,3 +218,63 @@ def test_both_alerts_can_fire_together_and_do_not_change_exit_action():
     p = dpos(und=482.0, delta=0.35, entry=0.15)
     assert kinds(rm.evaluate_alerts(p, TODAY)) == {AlertType.DELTA_ALERT, AlertType.STRIKE_PROXIMITY}
     assert rm.evaluate_exit(p, TODAY) is ExitAction.TAKE_PROFIT  # credit 1.0 / debit 0.5 -> exit logic untouched
+
+
+# --- Partial scale-out (opt-in) ----------------------------------------------------------------------------------
+
+def so_rm(pct=0.30, fraction=0.5):
+    return RiskManager(RiskLimits(scale_out_profit_pct=pct, scale_out_fraction=fraction))
+
+
+def test_scale_out_is_off_by_default():
+    rm = RiskManager()
+    p = pos(2.0, 1.2, contracts=4)                                   # 40% captured
+    assert rm.evaluate_exit(p, TODAY) is ExitAction.HOLD and rm.scale_out_contracts(p) == 0
+
+
+def test_scale_out_triggers_between_trigger_and_target_and_closes_half():
+    rm = so_rm(0.30)
+    p = pos(2.0, 1.2, contracts=4)                                   # 40% captured, 4 contracts
+    assert rm.evaluate_exit(p, TODAY) is ExitAction.SCALE_OUT and rm.scale_out_contracts(p) == 2
+    assert rm.evaluate_exit(pos(2.0, 1.41, contracts=4), TODAY) is ExitAction.HOLD     # 29.5%: below the trigger
+    assert rm.evaluate_exit(pos(2.0, 1.4, contracts=4), TODAY) is ExitAction.SCALE_OUT  # 30% boundary is inclusive
+    assert so_rm(0.40).evaluate_exit(pos(2.0, 1.3, contracts=4), TODAY) is ExitAction.HOLD   # 35% < 40% trigger
+
+
+def test_scale_out_needs_two_contracts_and_always_leaves_one_open():
+    rm = so_rm(0.30)
+    assert rm.evaluate_exit(pos(2.0, 1.2, contracts=1), TODAY) is ExitAction.HOLD      # nothing to split
+    sizes = {n: rm.scale_out_contracts(pos(2.0, 1.2, contracts=n)) for n in (2, 3, 5, 10)}
+    assert sizes == {2: 1, 3: 1, 5: 2, 10: 5}
+    assert so_rm(fraction=1.0).scale_out_contracts(pos(2.0, 1.2, contracts=4)) == 3     # never closes everything
+    assert so_rm(fraction=0.1).scale_out_contracts(pos(2.0, 1.2, contracts=4)) == 1     # at least one
+
+
+def test_scale_out_fires_once_per_position():
+    rm = so_rm(0.30)
+    full = replace(pos(2.0, 1.2, contracts=4), initial_contracts=4)
+    reduced = replace(pos(2.0, 1.2, contracts=2), initial_contracts=4)                  # already scaled out earlier
+    unknown = replace(pos(2.0, 1.2, contracts=4), initial_contracts=None)
+    assert rm.evaluate_exit(full, TODAY) is ExitAction.SCALE_OUT
+    assert rm.evaluate_exit(reduced, TODAY) is ExitAction.HOLD and rm.scale_out_contracts(reduced) == 0
+    assert rm.evaluate_exit(unknown, TODAY) is ExitAction.SCALE_OUT
+
+
+def test_scale_out_never_overrides_the_hard_exits():
+    rm = so_rm(0.30)
+    assert rm.evaluate_exit(pos(2.0, 0.9, contracts=4), TODAY) is ExitAction.TAKE_PROFIT        # >= 50% wins
+    assert rm.evaluate_exit(pos(2.0, 1.2, contracts=4, dte=10), TODAY) is ExitAction.CLOSE_DTE  # DTE exit wins
+    assert rm.evaluate_exit(pos(2.0, 6.0, contracts=4), TODAY) is ExitAction.STOP_LOSS
+
+
+def test_scale_out_works_for_bear_calls_too():
+    p = replace(call_pos(2.0, 1.2, contracts=2), initial_contracts=2)
+    assert so_rm().evaluate_exit(p, TODAY) is ExitAction.SCALE_OUT
+
+
+def test_scale_out_locks_in_only_a_small_amount_versus_remaining_risk():
+    """Documents why this is not 'risk-free': the kept contracts still carry their full max loss."""
+    p = pos(1.0, 0.6, contracts=2)                                   # 40% of a $1.00 credit, $5 wide
+    locked = (p.entry_credit - p.current_debit) * 100 * 1            # one contract closed
+    remaining_risk = (p.width - p.entry_credit) * 100 * 1
+    assert locked == pytest.approx(40) and remaining_risk == pytest.approx(400) and locked < remaining_risk

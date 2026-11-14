@@ -39,5 +39,10 @@ services:
       IB_HOST: ib-gateway
       # container-to-container port: 4004 paper / 4003 live
       IB_PORT: ${IB_PORT:-4004}
+    volumes:
+      - trade-data:/app/data    # SQLite trade log (TRADE_DB_PATH=data/trades.db) survives rebuilds
     ports:
       - "127.0.0.1:8000:8000"   # dashboard has NO auth: reach it via SSH tunnel / SSM / authenticated reverse proxy
+
+volumes:
+  trade-data:
