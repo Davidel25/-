@@ -1,7 +1,7 @@
 from datetime import date, timedelta
 
 from src.models import PositionLeg, SpreadPosition, SpreadSignal, SpreadType
-from src.risk.manager import ExitAction, RiskLimits, RiskManager, pair_legs
+from src.risk.manager import AlertType, ExitAction, RiskLimits, RiskManager, Severity, pair_legs
 
 TODAY = date(2026, 1, 5)
 EXP = TODAY + timedelta(days=30)
@@ -137,3 +137,81 @@ def test_default_exit_limits_match_playbook():
     # playbook example: 0.95 credit, $5 width -> $95 max profit, $405 max loss per lot
     p = SpreadPosition(SpreadType.BEAR_CALL, "SPY", EXP, 780, 785, 1, 0.95, 0.95)
     assert round(p.max_loss) == 405
+
+
+# --- Delta alert and strike-proximity alert ----------------------------------------------------------------------
+
+def dpos(spread_type=SpreadType.BULL_PUT, short=480, long=475, und=None, delta=None, entry=None):
+    return SpreadPosition(spread_type, "SPY", EXP, short, long, 1, 1.0, 0.5, und, delta, entry)
+
+
+def kinds(alerts):
+    return {a.type for a in alerts}
+
+
+def test_new_inputs_default_to_unknown_and_stay_backward_compatible():
+    p = pos()
+    assert (p.underlying_price, p.short_delta, p.entry_short_delta, p.distance_to_short_pct) == (None, None, None, None)
+    assert RiskManager().evaluate_alerts(p, TODAY) == []          # unknown inputs never alert
+    assert p.to_dict()["distance_to_short_pct"] is None
+
+
+def test_delta_alert_fires_at_exactly_2x_entry_delta():
+    rm = RiskManager()
+    assert kinds(rm.evaluate_alerts(dpos(delta=0.30, entry=0.15), TODAY)) == {AlertType.DELTA_ALERT}
+    assert kinds(rm.evaluate_alerts(dpos(delta=0.45, entry=0.15), TODAY)) == {AlertType.DELTA_ALERT}
+    assert rm.evaluate_alerts(dpos(delta=0.29, entry=0.15), TODAY) == []
+    assert rm.evaluate_alerts(dpos(delta=0.15, entry=0.15), TODAY) == []
+
+
+def test_delta_alert_uses_absolute_values_and_skips_missing_inputs():
+    rm = RiskManager()
+    assert kinds(rm.evaluate_alerts(dpos(delta=-0.32, entry=-0.15), TODAY)) == {AlertType.DELTA_ALERT}  # signed ok
+    assert rm.evaluate_alerts(dpos(delta=0.40, entry=None), TODAY) == []
+    assert rm.evaluate_alerts(dpos(delta=0.40, entry=0.0), TODAY) == []     # zero entry delta: no divide-by-zero
+    assert rm.evaluate_alerts(dpos(delta=None, entry=0.15), TODAY) == []
+
+
+def test_delta_alert_multiple_is_configurable():
+    rm = RiskManager(RiskLimits(delta_alert_multiple=1.5))
+    assert kinds(rm.evaluate_alerts(dpos(delta=0.23, entry=0.15), TODAY)) == {AlertType.DELTA_ALERT}
+
+
+def test_proximity_alert_bull_put_within_1_percent():
+    rm = RiskManager()
+    near = rm.evaluate_alerts(dpos(und=484.0), TODAY)                   # 0.83% above the 480 short put
+    assert kinds(near) == {AlertType.STRIKE_PROXIMITY} and near[0].severity is Severity.WARN
+    assert rm.evaluate_alerts(dpos(und=484.8), TODAY) != []             # exactly 1.0% -> alert (inclusive)
+    assert rm.evaluate_alerts(dpos(und=485.0), TODAY) == []             # 1.04% -> safe
+    assert rm.evaluate_alerts(dpos(und=520.0), TODAY) == []
+
+
+def test_proximity_alert_bear_call_within_1_percent():
+    rm = RiskManager()
+    call = dict(spread_type=SpreadType.BEAR_CALL, short=500, long=505)
+    near = rm.evaluate_alerts(dpos(**call, und=496.0), TODAY)           # 0.8% below the 500 short call
+    assert kinds(near) == {AlertType.STRIKE_PROXIMITY} and near[0].severity is Severity.WARN
+    assert rm.evaluate_alerts(dpos(**call, und=495.0), TODAY) != []     # exactly 1.0% below: alert is inclusive
+    assert rm.evaluate_alerts(dpos(**call, und=494.9), TODAY) == []     # 1.02% below: safe
+
+
+def test_proximity_alert_is_high_severity_once_strike_is_breached():
+    rm = RiskManager()
+    for p in (dpos(und=480.0), dpos(und=470.0),                                           # put at / through short
+              dpos(SpreadType.BEAR_CALL, 500, 505, und=500.0), dpos(SpreadType.BEAR_CALL, 500, 505, und=512.0)):
+        a = rm.evaluate_alerts(p, TODAY)
+        assert kinds(a) == {AlertType.STRIKE_PROXIMITY} and a[0].severity is Severity.HIGH
+        assert "BREACHED" in a[0].message
+
+
+def test_proximity_threshold_is_configurable():
+    rm = RiskManager(RiskLimits(strike_proximity_pct=0.03))
+    assert kinds(rm.evaluate_alerts(dpos(und=493.0), TODAY)) == {AlertType.STRIKE_PROXIMITY}   # 2.7% away
+    assert rm.evaluate_alerts(dpos(und=495.0), TODAY) == []
+
+
+def test_both_alerts_can_fire_together_and_do_not_change_exit_action():
+    rm = RiskManager()
+    p = dpos(und=482.0, delta=0.35, entry=0.15)
+    assert kinds(rm.evaluate_alerts(p, TODAY)) == {AlertType.DELTA_ALERT, AlertType.STRIKE_PROXIMITY}
+    assert rm.evaluate_exit(p, TODAY) is ExitAction.TAKE_PROFIT  # credit 1.0 / debit 0.5 -> exit logic untouched

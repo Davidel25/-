@@ -20,7 +20,8 @@ src/
   broker/              base.py (BrokerClient ABC), ib_client.py (IB Gateway), mock_client.py, factory.py
   data/                greeks.py (Black-Scholes price/delta), market_data.py (normalise chains -> models/DataFrame)
   strategies/          credit_spreads.py (ScannerConfig + scan_bull_put / scan_bear_call / scan_all)
-  risk/                manager.py (RiskLimits, RiskManager, pair_legs, ExitAction)
+  risk/                manager.py (RiskLimits, RiskManager, pair_legs, ExitAction, AlertType/RiskAlert),
+                       earnings.py (EarningsProvider, classify_earnings, JsonFile calendar), report.py (read-only CLI)
   alerts/              notifiers.py (Log / Telegram / Webhook, AlertDispatcher with cooldown)
   dashboard/           app.py (FastAPI factory) + index.html
 tests/                 pytest; everything runs against MockBroker, no network
@@ -37,6 +38,9 @@ BROKER=mock uvicorn src.dashboard.app:create_app --factory --reload   # local da
 BROKER=ib TRADING_MODE=paper IB_PORT=4002 uvicorn src.dashboard.app:create_app --factory   # vs local paper Gateway
 docker compose up -d --build                # app + IB Gateway
 ```
+Read-only position risk report (take-profit / stop / DTE / delta alert / strike proximity / earnings):
+`python -m src.risk.report --demo` or `python -m src.risk.report --earnings-file earnings.json --entry-deltas deltas.json`
+(exit code 0 clear, 1 attention needed, 2 broker error). Unknown earnings dates are flagged, never treated as clear.
 Dashboard API: `/api/health`, `/api/status`, `/api/signals`, `/api/positions`, `/` (HTML).
 
 ## Code style

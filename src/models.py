@@ -106,6 +106,26 @@ class SpreadPosition:
     contracts: int
     entry_credit: float   # per share
     current_debit: float  # per share cost to close now
+    # Optional live inputs for the delta / strike-proximity alerts. ``None`` means "unknown" (the broker's
+    # position feed does not carry them); the corresponding alert is then skipped, never guessed.
+    underlying_price: float | None = None
+    short_delta: float | None = None        # current |delta| of the short leg
+    entry_short_delta: float | None = None  # |delta| of the short leg when the trade was opened
+
+    @property
+    def key(self) -> str:
+        """Stable identifier, also used as the entry-delta journal key."""
+        return f"{self.symbol}:{self.spread_type.value}:{self.expiry}:{self.short_strike:g}/{self.long_strike:g}"
+
+    @property
+    def distance_to_short_pct(self) -> float | None:
+        """Cushion between the underlying and the short strike as a fraction of the short strike.
+        Positive = still out of the money, 0 = at the strike, negative = breached. None if price unknown."""
+        if self.underlying_price is None or self.short_strike <= 0:
+            return None
+        if self.spread_type is SpreadType.BULL_PUT:
+            return (self.underlying_price - self.short_strike) / self.short_strike
+        return (self.short_strike - self.underlying_price) / self.short_strike
 
     @property
     def width(self) -> float:
@@ -137,5 +157,7 @@ class SpreadPosition:
             unrealized_pnl=self.unrealized_pnl,
             profit_pct=self.profit_pct,
             dte=self.dte(),
+            key=self.key,
+            distance_to_short_pct=self.distance_to_short_pct,
         )
         return d
