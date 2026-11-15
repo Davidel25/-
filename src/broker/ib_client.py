@@ -111,6 +111,16 @@ class IBClient(BrokerClient):
                     quotes.append(q)
         return quotes
 
+    async def get_daily_closes(self, symbol: str, days: int = 90) -> list[float]:
+        contract = await self._underlying(symbol)
+        bars = await self.ib.reqHistoricalDataAsync(
+            contract, endDateTime="", durationStr=f"{max(days, 30)} D", barSizeSetting="1 day",
+            whatToShow="TRADES", useRTH=True, formatDate=1)
+        closes = [float(b.close) for b in bars if b.close and b.close > 0]
+        if not closes:
+            raise BrokerError(f"no price history for {symbol}")
+        return closes[-days:]
+
     @staticmethod
     def _to_quote(symbol: str, spot: float, t) -> OptionQuote | None:
         bid, ask = _clean(t.bid), _clean(t.ask)
@@ -128,6 +138,7 @@ class IBClient(BrokerClient):
             iv=_clean(g.impliedVol) if g else None,
             volume=int(_clean(t.volume) or 0),
             open_interest=int(_clean(oi) or 0),
+            quote_time=t.time if getattr(t, "time", None) else None,  # tz-aware UTC from ib_async
         )
 
     async def get_option_positions(self) -> list[PositionLeg]:

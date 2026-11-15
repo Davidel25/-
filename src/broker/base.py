@@ -35,6 +35,11 @@ class BrokerClient(ABC):
     @abstractmethod
     async def get_option_positions(self) -> list[PositionLeg]: ...
 
+    async def get_daily_closes(self, symbol: str, days: int = 90) -> list[float]:
+        """Recent daily closes, oldest first (for the 50-day SMA and historical-vol filters).
+        Brokers that cannot supply history raise BrokerError, which makes those filters fail closed."""
+        raise BrokerError(f"{type(self).__name__} does not provide price history")
+
     async def get_account_equity(self) -> float | None:
         """Net liquidation value, if the broker can provide it."""
         return None
