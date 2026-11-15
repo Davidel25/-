@@ -127,6 +127,12 @@ verdicts at zero premium; with a 15% implied-vol premium most runs were still "n
 the premium and ~150 trades cannot resolve a ~$5/trade effect - expect to need many symbols/years of data. Limits: EOD fills, no early
 assignment, hindsight earnings dates, overlapping/correlated trades, filters tuned in-sample (use `--oos-from`).
 
+Strategy-adjustment experiments (`experiments/`, results in `experiments/REPORT.md`): paired comparisons of rule variants on the SAME
+synthetic price paths (`src.backtest.compare.run_variants`, per-asset `SymbolProfile` generators, Sharpe in the metrics). Headline:
+friction (commission + natural-fill spread crossing) dominates; lower delta (0.12-0.15) helps Sharpe/tails but needs lower credit/ROC
+floors; a 30% profit target did NOT help; wider universes (higher-vol indices, single stocks) did NOT help. All synthetic: repeat on real
+option history before changing configuration.
+
 ## Known gaps / next steps
 - Dashboard live state is in-memory; trade history / P&L snapshots persist in SQLite (`TRADE_DB_PATH`). Fills are not read from the broker, so P&L is estimated.
 - No dashboard authentication, and `pair_legs` only recognises simple verticals (no iron condors / rolled legs).

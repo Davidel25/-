@@ -43,6 +43,7 @@ class Summary:
     annualized_return: float | None
     avg_hold_days: float | None
     breakeven_win_rate: float | None
+    sharpe: float | None = None
 
     @property
     def verdict(self) -> str:
@@ -81,6 +82,21 @@ def cluster_bootstrap_ci(trades: list[Trade], seed: int = 7, resamples: int = RE
     return means[int(0.025 * resamples)], means[int(0.975 * resamples) - 1]
 
 
+def daily_sharpe(curve: list[tuple[date, float]], min_days: int = 20) -> float | None:
+    """Annualised Sharpe of the daily change in the (realized + open mark-to-market) P&L curve, sqrt(252) scaling, no
+    risk-free subtraction. The ratio is scale-free, so it does not depend on the account size used.
+
+    Read it with care for short-premium strategies: they earn small steady gains and occasional large losses
+    (negative skew), which a Sharpe ratio understates until a loss arrives. Always look at max drawdown and the worst
+    trade too."""
+    if len(curve) < min_days + 1:
+        return None
+    diffs = [b[1] - a[1] for a, b in zip(curve, curve[1:], strict=False)]
+    mean = sum(diffs) / len(diffs)
+    var = sum((x - mean) ** 2 for x in diffs) / (len(diffs) - 1)
+    return None if var <= 1e-12 else mean / math.sqrt(var) * math.sqrt(252)
+
+
 def max_drawdown(curve: list[tuple[date, float]]) -> float:
     """Largest peak-to-trough fall of the realized + open mark-to-market curve, in dollars (a positive number)."""
     peak, worst = 0.0, 0.0
@@ -112,7 +128,8 @@ def summarize(trades: list[Trade], curve: list[tuple[date, float]] | None = None
         ci_low=ci[0] if ci else None, ci_high=ci[1] if ci else None, months=len({_month(t.open_date) for t in trades}),
         max_drawdown=round(max_drawdown(curve or []), 2),
         annualized_return=(net / equity / years) if years and equity else None,
-        avg_hold_days=sum(t.held_days for t in trades) / n if n else None, breakeven_win_rate=be)
+        avg_hold_days=sum(t.held_days for t in trades) / n if n else None, breakeven_win_rate=be,
+        sharpe=daily_sharpe(curve) if curve else None)
 
 
 def breakdown(trades: list[Trade], key) -> list[dict]:

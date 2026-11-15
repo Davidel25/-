@@ -47,6 +47,7 @@ def _summary_rows(s: Summary) -> list[tuple[str, str]]:
         ("Average win / average loss", f"{_money(s.avg_win)} / {_money(s.avg_loss)}"),
         ("Best / worst trade", f"{_money(s.best)} / {_money(s.worst)}"), ("Max drawdown", _money(s.max_drawdown)),
         ("Annualized return on account", _pct(s.annualized_return, 2)),
+        ("Sharpe (daily P&L, annualised, no risk-free)", "n/a" if s.sharpe is None else f"{s.sharpe:.2f}"),
         ("Average days held", "n/a" if s.avg_hold_days is None else f"{s.avg_hold_days:.1f}"),
     ]
 
