@@ -165,7 +165,10 @@ Paired NEW minus OLD: Sharpe **+0.39 +/- 0.16 (6/8 seeds)** at +10% and **+0.48 
   by +0.02 +/- 0.14 (3/8) at +10% and +0.28 +/- 0.09 (7/8) at +20%.
 * **At +10% premium the new configuration is not distinguishable from zero** (Sharpe +0.09 +/- 0.17, about +$25 +/- $65 a year); it
   is better than the old one, not proven profitable.
-* **A $20k account with the default 2% per-trade risk cap trades nothing:** a 5-wide spread at these credits risks about $443 (cap $400);
+* **Resolved: the configured per-trade cap is now 10%.** A $20k backtest on the configured defaults trades 34.1 times a year at about
+  $440 risk per trade (max $446), with no risk-gate rejections; the previous 2% cap traded zero times (about 2,700 rejections per seed).
+  10% is far looser than needed; the limits that actually bind are the scanner's $1,000 per-lot cap and the 20% total-open-risk cap.
+* *Original finding:* **a $20k account with a 2% per-trade risk cap trades nothing:** a 5-wide spread at these credits risks about $443 (cap $400);
   every signal is rejected by the risk gate (2,700 rejections per seed). At 2.5% ($500) the results equal the unconstrained run above.
   Real SPY/QQQ strikes are $1 apart, so narrower widths exist, but at 0.12-0.15 delta a 3-wide spread collects about 0.30, below the 0.45
   credit floor and the 12% ROC floor; the synthetic chains here only have $5 strikes, so that path is untested.

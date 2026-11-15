@@ -75,15 +75,75 @@ def test_full_disciplined_filters_still_find_trades_end_to_end_in_a_healthy_prem
     assert all(0.12 <= t.entry_short_delta <= 0.15 for t in r.trades)
 
 
-def test_a_five_wide_spread_exceeds_two_percent_risk_on_a_20k_account():
-    """Why the risk cap matters: the relaxed floors pick 5-wide spreads (~$440 at risk), above 2% of $20k = $400."""
-    sig = SpreadSignal(SpreadType.BULL_PUT, "SPY", FRIDAY, 35, 500, 485, 480, 5.0, 0.57, 57, 443, 0.129, 0.14, 0.86,
-                       484.4, 0.03)
-    default = RiskManager(Settings(account_equity=20_000).risk_limits())
-    assert not default.check_signal(sig, [], 20_000).approved                    # blocked by the per-trade cap
-    assert "trade risk $443" in default.check_signal(sig, [], 20_000).reasons[0]
-    looser = RiskManager(Settings(max_risk_per_trade_pct=0.025).risk_limits())
-    assert looser.check_signal(sig, [], 20_000).approved                         # 2.5% = $500 fits
+def five_wide_signal(max_loss=443.0, credit=0.57):
+    return SpreadSignal(SpreadType.BULL_PUT, "SPY", FRIDAY, 35, 500, 485, 480, 5.0, credit, credit * 100, max_loss,
+                        0.129, 0.14, 0.86, 484.4, 0.03)
+
+
+def test_the_configured_risk_cap_admits_a_five_wide_spread_on_a_20k_account():
+    """The relaxed floors pick 5-wide spreads (~$443 = 2.2% of $20k). The old 2% cap ($400) rejected them all."""
+    sig = five_wide_signal()
+    configured = RiskManager(Settings().risk_limits())
+    assert configured.limits.max_risk_per_trade_pct == 0.10
+    assert configured.check_signal(sig, [], 20_000).approved                     # $443 <= $2,000
+    old = RiskManager(Settings(max_risk_per_trade_pct=0.02).risk_limits())
+    refused = old.check_signal(sig, [], 20_000)
+    assert not refused.approved and "trade risk $443" in refused.reasons[0]    # the old behaviour, still reachable
+    # 2.5% is the tightest round setting that still lets these spreads through on $20k
+    assert RiskManager(Settings(max_risk_per_trade_pct=0.025).risk_limits()).check_signal(sig, [], 20_000).approved
+    assert not RiskManager(Settings(max_risk_per_trade_pct=0.021).risk_limits()).check_signal(sig, [], 20_000).approved
+
+
+def test_the_cap_defaults_to_ten_percent_in_settings_env_and_the_backtest_while_the_library_default_stays_two():
+    assert RiskLimits().max_risk_per_trade_pct == 0.02                            # neutral library default
+    assert RiskLimits.disciplined().max_risk_per_trade_pct == 0.10
+    assert RiskLimits.disciplined(max_risk_per_trade_pct=0.03).max_risk_per_trade_pct == 0.03
+    assert Settings().max_risk_per_trade_pct == 0.10 == Settings.from_env().max_risk_per_trade_pct
+    assert BacktestConfig().limits.max_risk_per_trade_pct == 0.10
+
+
+def test_the_ten_percent_ceiling_is_accepted_and_anything_above_is_rejected_at_startup(monkeypatch):
+    monkeypatch.setenv("MAX_RISK_PER_TRADE_PCT", "0.10")
+    assert Settings.from_env().risk_limits().max_risk_per_trade_pct == 0.10    # exactly the ceiling: no startup error
+    for bad in ("0.1001", "0.11", "0.5", "0", "-0.02"):
+        monkeypatch.setenv("MAX_RISK_PER_TRADE_PCT", bad)
+        with pytest.raises(ValueError, match=r"MAX_RISK_PER_TRADE_PCT must be in \(0, 0.1\]"):
+            Settings.from_env()
+    monkeypatch.delenv("MAX_RISK_PER_TRADE_PCT")
+    assert Settings.from_env().max_risk_per_trade_pct == 0.10
+
+
+def test_the_service_approves_lower_delta_spreads_on_a_20k_account():
+    """Real service path: mock chain, $20k equity, the 0.12-0.15 delta band and the relaxed floors."""
+    cfg = ScannerConfig.disciplined(**NO_STATS_GATES, top_n_per_symbol=20)
+    settings = Settings(broker="mock", watchlist=["SPY"], scan_enabled=False, account_equity=20_000)
+    svc = ScanService(settings, MockBroker(today=TODAY, equity=20_000), AlertDispatcher([]), scanner_cfg=cfg)
+    asyncio.run(svc.run_once())
+    assert svc.state.equity == 20_000 and svc.state.signals and svc.state.rejected == 0
+    assert all(0.12 <= s["short_delta"] <= 0.15 and s["credit"] >= 0.45 for s in svc.state.signals)
+    assert any(s["max_loss"] > 400 for s in svc.state.signals)             # spreads the old 2% cap would have rejected
+    old = Settings(broker="mock", watchlist=["SPY"], scan_enabled=False, account_equity=20_000,
+                   max_risk_per_trade_pct=0.02)
+    svc_old = ScanService(old, MockBroker(today=TODAY, equity=20_000), AlertDispatcher([]), scanner_cfg=cfg)
+    asyncio.run(svc_old.run_once())
+    assert svc_old.state.signals == [] and svc_old.state.rejected > 0             # the 2% cap blocks them all
+
+
+def test_the_loose_per_trade_cap_does_not_remove_the_other_risk_limits():
+    rm = RiskManager(Settings().risk_limits())
+    # the scanner still refuses anything above $1,000 of risk per lot, whatever the per-trade cap says
+    chain, d = synthetic_day(days=70)
+    wide = scan_all(chain, ScannerConfig.disciplined(**NO_STATS_GATES, widths=(5.0, 20.0), top_n_per_symbol=50), d)
+    assert wide and all(s.max_loss <= 1_000 for s in wide)
+    # total open risk is still capped at 20% of equity: nine $443 spreads fit in $4,000, the tenth does not
+    book = [SpreadPosition(SpreadType.BULL_PUT, "SPY", FRIDAY, 480 - i, 475 - i, 1, 0.57, 0.5, 500.0)
+            for i in range(9)]
+    assert all(p.max_loss == pytest.approx(443) for p in book)
+    rm.limits.max_open_positions = 20
+    rm.limits.max_positions_per_symbol = 20
+    assert rm.check_signal(five_wide_signal(), book[:8], 20_000).approved
+    over = rm.check_signal(five_wide_signal(), book, 20_000)
+    assert not over.approved and "total risk" in over.reasons[0]
 
 
 # --- 2. 65% profit target ---

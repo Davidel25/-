@@ -63,10 +63,13 @@ Dashboard API: `/api/health`, `/api/status`, `/api/signals`, `/api/positions`, `
   ROC >= **12%**, profit target **65%** (library `RiskLimits()` default stays 50%), universe **SPY/QQQ only**. Chosen from the synthetic
   strategy-adjustment simulations (`experiments/REPORT.md`) and re-verified end to end (`experiments/verify_adopted.py`): synthetic
   evidence only, re-test on real option history.
-- Risk (`RiskLimits`): <=2% equity per trade, <=20% total open risk, <=10 positions, <=2 per symbol;
-  exits: take profit at the configured target (65%), stop at loss >= 2x credit, close at DTE <= 14.
-- **$20k account caveat:** at 0.12-0.15 delta a 5-wide spread collects ~0.57 and risks ~$443, above the 2% cap ($400), so the
-  per-trade risk gate blocks every signal. Set `MAX_RISK_PER_TRADE_PCT=0.025` ($500) or use a larger account.
+- Risk (`RiskLimits`): library default <=2% equity per trade; the CONFIGURED cap is **10%** (`MAX_RISK_PER_TRADE_PCT`, hard ceiling
+  10%), <=20% total open risk, <=10 positions, <=2 per symbol; exits: take profit at the configured target (65%), stop at loss
+  >= 2x credit, close at DTE <= 14.
+- **Per-trade risk on a $20k account:** at 0.12-0.15 delta a 5-wide spread collects ~0.57 and risks ~$443 (2.2%). The old 2% cap
+  ($400) rejected every signal; 10% ($2,000) admits them. 10% is far looser than needed (2.5% is the smallest value that works),
+  so the limits that actually bind are the scanner's `max_risk_per_spread` ($1,000 per lot = 5% of $20k) and the 20% total-open-risk
+  cap. Tighten with `MAX_RISK_PER_TRADE_PCT`.
 
 ## IB Gateway notes
 - API ports on a bare-metal Gateway: **4001 live, 4002 paper** (TWS uses 7496/7497).

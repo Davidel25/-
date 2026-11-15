@@ -14,6 +14,13 @@ from src.risk.portfolio import PortfolioSnapshot
 # +10% and +20% implied-vol premium, while a 30% target was worse (see experiments/REPORT.md). Synthetic evidence only:
 # re-test on real option history. ``RiskLimits()`` itself keeps the neutral library default of 50%.
 DISCIPLINED_PROFIT_TARGET = 0.65
+# Per-trade risk cap as a share of equity, and its hard ceiling (anything above is rejected at startup). 10% of a $20k
+# account is $2,000: far more than the ~$443 a 5-wide 0.12-0.15 delta spread risks (2.2%), which a 2% cap ($400)
+# rejected. The cap is deliberately generous; the binding limits are the scanner's own ``max_risk_per_spread``
+# ($1,000 per lot) and ``RiskLimits.max_total_risk_pct`` (20% of equity across all open spreads). Tighten with
+# ``MAX_RISK_PER_TRADE_PCT`` (2.5% is the smallest value that admits these spreads on $20k).
+DISCIPLINED_MAX_RISK_PER_TRADE = 0.10
+MAX_RISK_PER_TRADE_CEILING = 0.10
 
 
 @dataclass
@@ -39,9 +46,11 @@ class RiskLimits:
 
     @classmethod
     def disciplined(cls, **overrides) -> RiskLimits:
-        """The configured exit rules: take profit at 65% of the credit (instead of the library default 50%), stop at a
-        2x-credit loss, close at DTE <= 14. Individual fields can be overridden."""
-        return cls(**{"profit_target_pct": DISCIPLINED_PROFIT_TARGET, **overrides})
+        """The configured rules: take profit at 65% of the credit (instead of the library default 50%), stop at a
+        2x-credit loss, close at DTE <= 14, and a 10% per-trade risk cap (instead of 2%). Individual fields can be
+        overridden."""
+        return cls(**{"profit_target_pct": DISCIPLINED_PROFIT_TARGET,
+                      "max_risk_per_trade_pct": DISCIPLINED_MAX_RISK_PER_TRADE, **overrides})
 
 
 @dataclass

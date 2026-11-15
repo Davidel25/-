@@ -4,7 +4,12 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
-from src.risk.manager import DISCIPLINED_PROFIT_TARGET, RiskLimits
+from src.risk.manager import (
+    DISCIPLINED_MAX_RISK_PER_TRADE,
+    DISCIPLINED_PROFIT_TARGET,
+    MAX_RISK_PER_TRADE_CEILING,
+    RiskLimits,
+)
 from src.risk.portfolio import DEFAULT_BETAS, parse_betas
 
 # Gateway API ports on a bare-metal install. The gnzsnz/ib-gateway Docker image
@@ -58,7 +63,7 @@ class Settings:
     betas: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_BETAS))  # beta to SPY by symbol
     max_net_beta_delta_pct: float = 1.0  # cap on net beta-weighted delta as a fraction of equity
     profit_target_pct: float = DISCIPLINED_PROFIT_TARGET  # take profit at this share of the credit
-    max_risk_per_trade_pct: float = 0.02  # max loss of one new trade as a fraction of equity
+    max_risk_per_trade_pct: float = DISCIPLINED_MAX_RISK_PER_TRADE  # max loss of one new trade / equity
     scale_out_profit_pct: float = 0.0    # 0 = off; 0.30 / 0.40 recommends closing half of a >= 2 contract position
     earnings_provider: str = "file"      # "file" (manual calendar only) | "finnhub" (automated feed layered under it)
     earnings_api_key: str = field(default="", repr=False)
@@ -73,8 +78,8 @@ class Settings:
         """The risk/exit rules the system runs with, built from these settings (single source for service and CLIs)."""
         if not 0 < self.profit_target_pct <= 1:
             raise ValueError("PROFIT_TARGET_PCT must be in (0, 1]")
-        if not 0 < self.max_risk_per_trade_pct <= 0.10:
-            raise ValueError("MAX_RISK_PER_TRADE_PCT must be in (0, 0.10]")
+        if not 0 < self.max_risk_per_trade_pct <= MAX_RISK_PER_TRADE_CEILING:
+            raise ValueError(f"MAX_RISK_PER_TRADE_PCT must be in (0, {MAX_RISK_PER_TRADE_CEILING:g}]")
         if self.scale_out_profit_pct and self.scale_out_profit_pct >= self.profit_target_pct:
             raise ValueError("SCALE_OUT_PROFIT_PCT must be below PROFIT_TARGET_PCT (the target fires first)")
         return RiskLimits(profit_target_pct=self.profit_target_pct,
@@ -105,7 +110,7 @@ class Settings:
             watchlist=_list("WATCHLIST", ",".join(CORE_UNIVERSE)),
             universe_allowlist=tuple(_list("UNIVERSE_ALLOWLIST", ",".join(CORE_UNIVERSE))),
             profit_target_pct=float(os.getenv("PROFIT_TARGET_PCT", str(DISCIPLINED_PROFIT_TARGET))),
-            max_risk_per_trade_pct=float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.02")),
+            max_risk_per_trade_pct=float(os.getenv("MAX_RISK_PER_TRADE_PCT", str(DISCIPLINED_MAX_RISK_PER_TRADE))),
             scan_interval_sec=int(os.getenv("SCAN_INTERVAL_SEC", "300")),
             scan_enabled=_bool("SCAN_ENABLED", True),
             account_equity=float(os.getenv("ACCOUNT_EQUITY", "50000")),
