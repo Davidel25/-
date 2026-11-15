@@ -185,3 +185,72 @@ Runners-up: `d0.18|low|t70|s2|45-60|x7` 0.18; `CURRENT+window45-60` 0.17 (one-pa
 Theme: let winners run (target 65-70%, stop 2.5x, exit 7 DTE, 45-60 DTE entry); delta 0.12-0.20 roughly interchangeable once
 floors are lowered; delta 0.10 trades too rarely. Caveats: winner's curse (winners' TRAINING Sharpe was negative), gains are ~2 SE,
 premium-dependent (+10% VRP: still ~0; +20%: ~0.4), all configs marginal. No defaults changed; re-test on real option history.
+
+## Time-stops and limit-order execution (`experiments/exec_timestop.py`)
+
+Paired grid, 28 variants on 24 UNSEEN datasets (seeds 301-312 x implied-vol premia +10%/+20%, SPY+QQQ, 800 days), on top of
+the sweep's recommended set (BASE = `d0.15|low|t70|s2.5|45-60|x7`; CURRENT = the adopted config). Both features are OFF by
+default (`RiskLimits.time_stop_fraction`, `BacktestConfig.*_fill_improvement`). Synthetic data; the fill probability and
+adverse-selection inputs are ASSUMPTIONS (daily bars cannot calibrate them).
+
+Full table (Sharpe differences are paired vs BASE; max DD in $ per 1 lot):
+
+| variant | Sharpe | dSharpe vs BASE (+/-SE, better/n) | d Sharpe @+10% | d Sharpe @+20% | net $/trade | d annual $ | max DD $ | trades/yr | avg hold d |
+|---|---|---|---|---|---|---|---|---|---|
+| CURRENT | -0.10 | -0.32 ± 0.11 (8/24) | -0.35 | -0.28 | -1.4 | -117 | 727 | 32.5 | 19.5 |
+| BASE | 0.22 | - | 0.00 | 0.00 | 3.3 | 0 | 597 | 22.6 | 33.9 |
+| TS f0.4 p0 | -0.17 | -0.39 ± 0.09 (6/24) | -0.45 | -0.34 | -2.5 | -138 | 615 | 24.8 | 27.6 |
+| TS f0.4 p10 | -0.15 | -0.37 ± 0.09 (6/24) | -0.41 | -0.34 | -2.2 | -131 | 598 | 25.1 | 27.2 |
+| TS f0.4 p20 | -0.13 | -0.36 ± 0.09 (6/24) | -0.37 | -0.34 | -2.0 | -126 | 587 | 25.4 | 26.9 |
+| TS f0.4 p30 | -0.14 | -0.37 ± 0.09 (5/24) | -0.35 | -0.38 | -2.1 | -129 | 591 | 25.8 | 26.5 |
+| TS f0.5 p0 | -0.02 | -0.24 ± 0.08 (8/24) | -0.30 | -0.19 | -0.7 | -91 | 581 | 23.8 | 29.7 |
+| TS f0.5 p10 | -0.05 | -0.27 ± 0.08 (6/24) | -0.33 | -0.21 | -1.1 | -99 | 592 | 23.9 | 29.6 |
+| TS f0.5 p20 | -0.07 | -0.29 ± 0.08 (6/24) | -0.35 | -0.23 | -1.3 | -106 | 590 | 24.2 | 29.2 |
+| TS f0.5 p30 | -0.08 | -0.30 ± 0.08 (5/24) | -0.37 | -0.24 | -1.5 | -109 | 583 | 24.4 | 28.9 |
+| TS f0.6 p0 | 0.18 | -0.05 ± 0.08 (12/24) | -0.10 | 0.00 | 2.2 | -24 | 560 | 22.9 | 31.8 |
+| TS f0.6 p10 | 0.17 | -0.05 ± 0.07 (10/24) | -0.10 | -0.00 | 2.1 | -27 | 566 | 23.0 | 31.7 |
+| TS f0.6 p20 | 0.14 | -0.08 ± 0.08 (12/24) | -0.11 | -0.04 | 1.7 | -35 | 566 | 23.1 | 31.6 |
+| TS f0.6 p30 | 0.13 | -0.09 ± 0.08 (11/24) | -0.14 | -0.04 | 1.5 | -40 | 571 | 23.2 | 31.4 |
+| FILL entry.5 | 0.35 | +0.13 ± 0.02 (23/24) | 0.09 | 0.16 | 5.4 | 48 | 581 | 22.6 | 33.9 |
+| FILL exit.5 | 0.26 | +0.04 ± 0.00 (24/24) | 0.04 | 0.04 | 4.0 | 16 | 586 | 22.6 | 33.9 |
+| FILL f0.25 prob1 adv0 | 0.31 | +0.09 ± 0.02 (22/24) | 0.06 | 0.12 | 4.8 | 34 | 586 | 22.6 | 33.9 |
+| FILL f0.25 prob1 adv0.5 | 0.29 | +0.07 ± 0.02 (21/24) | 0.04 | 0.09 | 4.5 | 26 | 590 | 22.6 | 33.9 |
+| FILL f0.25 prob0.6 adv0 | 0.31 | +0.09 ± 0.04 (17/24) | -0.02 | 0.20 | 5.0 | 37 | 586 | 22.5 | 34.1 |
+| FILL f0.25 prob0.6 adv0.5 | 0.29 | +0.07 ± 0.05 (17/24) | -0.04 | 0.19 | 4.7 | 30 | 588 | 22.4 | 34.1 |
+| FILL f0.5 prob1 adv0 | 0.39 | +0.17 ± 0.02 (24/24) | 0.13 | 0.20 | 6.2 | 65 | 571 | 22.6 | 33.9 |
+| FILL f0.5 prob1 adv0.5 | 0.31 | +0.09 ± 0.02 (22/24) | 0.06 | 0.12 | 4.8 | 34 | 586 | 22.6 | 33.9 |
+| FILL f0.5 prob0.6 adv0 | 0.37 | +0.15 ± 0.06 (18/24) | 0.13 | 0.18 | 6.3 | 67 | 585 | 22.3 | 34.4 |
+| FILL f0.5 prob0.6 adv0.5 | 0.31 | +0.09 ± 0.05 (15/24) | 0.06 | 0.11 | 5.2 | 40 | 603 | 22.3 | 34.5 |
+| FILL f1 prob1 adv0 | 0.50 | +0.28 ± 0.03 (23/24) | 0.24 | 0.33 | 8.0 | 108 | 567 | 22.7 | 33.7 |
+| FILL f1 prob1 adv0.5 | 0.39 | +0.17 ± 0.02 (24/24) | 0.13 | 0.20 | 6.2 | 65 | 571 | 22.6 | 33.9 |
+| FILL f1 prob0.6 adv0 | 0.41 | +0.19 ± 0.06 (17/24) | 0.05 | 0.33 | 6.9 | 78 | 614 | 21.9 | 34.6 |
+| FILL f1 prob0.6 adv0.5 | 0.32 | +0.10 ± 0.09 (15/24) | -0.01 | 0.21 | 5.4 | 42 | 601 | 21.6 | 35.0 |
+
+Friction-recovery bound (entry+exit at the mid, always filled): +108 $/yr vs BASE. Share of it captured:
+  FILL entry.5: 45%
+  FILL exit.5: 15%
+  FILL f0.25 prob1 adv0: 32%
+  FILL f0.25 prob1 adv0.5: 24%
+  FILL f0.25 prob0.6 adv0: 34%
+  FILL f0.25 prob0.6 adv0.5: 28%
+  FILL f0.5 prob1 adv0: 60%
+  FILL f0.5 prob1 adv0.5: 32%
+  FILL f0.5 prob0.6 adv0: 63%
+  FILL f0.5 prob0.6 adv0.5: 37%
+  FILL f1 prob1 adv0: 100%
+  FILL f1 prob1 adv0.5: 60%
+  FILL f1 prob0.6 adv0: 72%
+  FILL f1 prob0.6 adv0.5: 39%
+
+Findings
+* Time-stops HURT. Every variant has lower Sharpe than BASE; fractions 0.4-0.5 cost 0.24-0.39 Sharpe (about 3-4 SE). The mildest
+  (close past 60% of life, only if not profitable) is statistically a wash (-0.05 +/- 0.08) and trims max DD 597 -> 560.
+  The "frees buying power" mechanism is not binding here: trades/yr barely moves (22.6 -> 22.9) because the limit is one
+  open spread per (symbol, side), not capital. Closing stale trades early locks in losses on positions that mostly
+  recover or decay to the target. Keep OFF.
+* Limit-order execution is the one lever with a clear, large effect, but it is ASSUMPTION-driven. Resting at the mid with
+  guaranteed fills (the upper bound) adds +0.28 Sharpe and ~$108/yr per lot, more than BASE's whole net P&L (~$75/yr):
+  friction is bigger than the edge. Halfway-to-mid with a 60% fill rate and half the gain lost to adverse selection still
+  gives +0.09 +/- 0.05 (15/24 datasets, ~$40/yr). Entry improvement carries most of the value (45% of the bound for f=0.5
+  at entry only vs 15% at exit only); stop-losses always cross.
+* Scanner floors are tested at the natural credit (conservative); a mid-aware scanner would also admit more trades.

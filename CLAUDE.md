@@ -146,6 +146,12 @@ friction (commission + natural-fill spread crossing) dominates; lower delta (0.1
 floors; a 30% profit target did NOT help; wider universes (higher-vol indices, single stocks) did NOT help. All synthetic: repeat on real
 option history before changing configuration.
 
+- Optional (OFF by default): `RiskLimits.time_stop_fraction` / `time_stop_min_profit_pct` (ExitAction.TIME_STOP; needs
+  `SpreadPosition.opened_on`, skipped when unknown) and backtest fill modelling (`BacktestConfig.entry_fill_improvement`,
+  `exit_fill_improvement`, `fill_prob_at_mid`, `adverse_selection_pct`). Paired synthetic grid (`experiments/exec_timestop.py`,
+  REPORT.md): time-stops lowered Sharpe in every variant (keep off); limit-order fills toward the mid add Sharpe but the
+  size depends on assumed fill rates - calibrate from paper-trading fills. The system stays read-only (advisory prices only).
+
 ## Known gaps / next steps
 - Dashboard live state is in-memory; trade history / P&L snapshots persist in SQLite (`TRADE_DB_PATH`). Fills are not read from the broker, so P&L is estimated.
 - No dashboard authentication, and `pair_legs` only recognises simple verticals (no iron condors / rolled legs).
