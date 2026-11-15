@@ -278,3 +278,43 @@ def test_scale_out_locks_in_only_a_small_amount_versus_remaining_risk():
     locked = (p.entry_credit - p.current_debit) * 100 * 1            # one contract closed
     remaining_risk = (p.width - p.entry_credit) * 100 * 1
     assert locked == pytest.approx(40) and remaining_risk == pytest.approx(400) and locked < remaining_risk
+
+
+# --- optional time-stop (off by default) ---
+def aged(credit, debit, *, life=40, elapsed=20, **kw):
+    """A position opened ``elapsed`` days ago on a ``life``-day trade (DTE = life - elapsed)."""
+    p = pos(credit, debit, dte=life - elapsed)
+    return replace(p, opened_on=TODAY - timedelta(days=elapsed), **kw)
+
+
+def test_time_stop_is_off_by_default():
+    assert RiskLimits().time_stop_fraction is None and RiskLimits.disciplined().time_stop_fraction is None
+    assert RiskManager().evaluate_exit(aged(1.0, 0.95), TODAY) is ExitAction.HOLD
+
+
+def test_time_stop_fires_past_half_life_with_too_little_profit():
+    rm = RiskManager(RiskLimits(time_stop_fraction=0.5, time_stop_min_profit_pct=0.20))
+    assert rm.evaluate_exit(aged(1.0, 0.95), TODAY) is ExitAction.TIME_STOP           # 5% profit at exactly 50% of life
+    assert rm.evaluate_exit(aged(1.0, 1.4), TODAY) is ExitAction.TIME_STOP            # a loser short of the stop too
+    assert rm.evaluate_exit(aged(1.0, 0.75), TODAY) is ExitAction.HOLD                # 25% profit: enough, keep going
+    assert rm.evaluate_exit(aged(1.0, 0.95, elapsed=19), TODAY) is ExitAction.HOLD    # 47.5% of life: not yet
+
+
+def test_time_stop_never_overrides_the_other_exits_and_needs_the_entry_date():
+    rm = RiskManager(RiskLimits(time_stop_fraction=0.5))
+    assert rm.evaluate_exit(aged(1.0, 0.4), TODAY) is ExitAction.TAKE_PROFIT
+    assert rm.evaluate_exit(aged(1.0, 3.0), TODAY) is ExitAction.STOP_LOSS
+    assert rm.evaluate_exit(aged(1.0, 0.95, life=30, elapsed=20), TODAY) is ExitAction.CLOSE_DTE   # DTE 10 <= 14
+    assert rm.evaluate_exit(pos(1.0, 0.95, dte=20), TODAY) is ExitAction.HOLD     # entry date unknown: never guessed
+
+
+def test_time_stop_can_be_limited_to_losing_trades():
+    rm = RiskManager(RiskLimits(time_stop_fraction=0.5, time_stop_min_profit_pct=0.0))
+    assert rm.evaluate_exit(aged(1.0, 0.95), TODAY) is ExitAction.HOLD        # small gain: leave it
+    assert rm.evaluate_exit(aged(1.0, 1.1), TODAY) is ExitAction.TIME_STOP    # underwater: free the slot
+
+
+def test_time_stop_fraction_is_validated():
+    for bad in (0.0, 1.0, 1.5, -0.2):
+        with pytest.raises(ValueError):
+            RiskLimits(time_stop_fraction=bad)

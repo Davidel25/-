@@ -43,6 +43,16 @@ class RiskLimits:
     # contracts keep their full max loss). Typical values: 0.30 or 0.40.
     scale_out_profit_pct: float | None = None
     scale_out_fraction: float = 0.5        # share of contracts to close at the scale-out trigger
+    # Optional time-stop. OFF by default (None). Once this share of the trade's life has elapsed (0.5 = half way from
+    # entry to expiry) and less than ``time_stop_min_profit_pct`` of the credit is captured, close and free the slot.
+    # Needs the entry date (``SpreadPosition.opened_on``); with it unknown the rule is skipped, never guessed.
+    # A negative ``time_stop_min_profit_pct`` restricts it to positions already losing more than that share.
+    time_stop_fraction: float | None = None
+    time_stop_min_profit_pct: float = 0.20
+
+    def __post_init__(self) -> None:
+        if self.time_stop_fraction is not None and not 0 < self.time_stop_fraction < 1:
+            raise ValueError("time_stop_fraction must be between 0 and 1 (exclusive) or None")
 
     @classmethod
     def disciplined(cls, **overrides) -> RiskLimits:
@@ -64,6 +74,7 @@ class ExitAction(StrEnum):
     TAKE_PROFIT = "TAKE_PROFIT"
     STOP_LOSS = "STOP_LOSS"
     CLOSE_DTE = "CLOSE_DTE"
+    TIME_STOP = "TIME_STOP"  # optional: lingered past a share of its life without enough profit (off by default)
     SCALE_OUT = "SCALE_OUT"  # advisory: close part of the position, let the rest run to the profit target / DTE exit
 
 
@@ -162,6 +173,11 @@ class RiskManager:
             return ExitAction.STOP_LOSS
         if pos.dte(today) <= lim.close_at_dte:
             return ExitAction.CLOSE_DTE
+        if lim.time_stop_fraction is not None:
+            elapsed = pos.life_elapsed(today)
+            if elapsed is not None and elapsed >= lim.time_stop_fraction \
+                    and pos.profit_pct < lim.time_stop_min_profit_pct:
+                return ExitAction.TIME_STOP
         if lim.scale_out_profit_pct is not None and pos.profit_pct >= lim.scale_out_profit_pct \
                 and self.scale_out_contracts(pos) > 0:
             return ExitAction.SCALE_OUT

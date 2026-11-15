@@ -16,6 +16,7 @@ Honest limits (also printed in every report)
     Use the out-of-sample split, and treat anything short of many independent months as inconclusive."""
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass, field, replace
 from datetime import date
 
@@ -35,6 +36,23 @@ class BacktestConfig:
     commission_per_contract: float = 0.65
     slippage_per_leg: float = 0.0           # extra $ per share on each of the 4 leg fills (open + close)
     exit_pricing: str = "natural"           # cost to close: "natural" (short ask - long bid) | "mid"
+    # Execution model (all OFF by default: every fill is natural, as before). A working limit order is placed a share
+    # ``f`` of the way from the natural price toward the mid (0 = cross the spread, 1 = rest at the mid). It fills with
+    # probability ``1 - (1 - fill_prob_at_mid) * f`` (a missed ENTRY is skipped; a missed discretionary EXIT is
+    # retried the next session); a filled order keeps only ``1 - adverse_selection_pct`` of the improvement, because
+    # resting orders tend to fill when the market moves against them. Stop-loss exits and expiry always cross.
+    # Scanner floors are still tested at the natural credit (conservative). Daily data cannot calibrate any of this:
+    # treat the numbers as assumptions to be replaced by paper-trading fill logs.
+    entry_fill_improvement: float = 0.0
+    exit_fill_improvement: float = 0.0
+    fill_prob_at_mid: float = 1.0
+    adverse_selection_pct: float = 0.0
+    fill_seed: int = 7
+
+    def __post_init__(self) -> None:
+        for name in ("entry_fill_improvement", "exit_fill_improvement", "fill_prob_at_mid", "adverse_selection_pct"):
+            if not 0.0 <= getattr(self, name) <= 1.0:
+                raise ValueError(f"{name} must be between 0 and 1")
     max_new_per_day: int = 1
     contracts: int = 1
     earnings: dict[str, list[date]] | None = None   # None -> single stocks are never traded (ETFs are)
@@ -87,7 +105,7 @@ class _Open:
         return SpreadPosition(
             s.spread_type, s.symbol, s.expiry, s.short_strike, s.long_strike, contracts, s.credit, self.last_debit,
             underlying_price=self.last_und, short_delta=s.short_delta, entry_short_delta=s.short_delta,
-            initial_contracts=contracts, long_delta=s.long_delta)
+            initial_contracts=contracts, long_delta=s.long_delta, opened_on=self.open_date)
 
 
 @dataclass
@@ -106,6 +124,23 @@ class BacktestResult:
 def _close_debit(short, long, pricing: str, width: float) -> float:
     raw = (short.ask - long.bid) if pricing == "natural" else (short.mid - long.mid)
     return min(max(raw, 0.0), width)
+
+
+def _fill_probability(improvement: float, at_mid: float) -> float:
+    return 1.0 - (1.0 - at_mid) * improvement
+
+
+def _improved_credit(sig: SpreadSignal, short, long, improvement: float, haircut: float) -> float:
+    """Entry credit when the working limit sits ``improvement`` of the way from natural to mid."""
+    mid_credit = short.mid - long.mid
+    gain = max(mid_credit - sig.credit, 0.0) * improvement * (1.0 - haircut)
+    return round(min(sig.credit + gain, sig.width - 0.01), 4)
+
+
+def _improved_debit(natural: float, short, long, improvement: float, haircut: float, width: float) -> float:
+    mid_debit = min(max(short.mid - long.mid, 0.0), width)
+    gain = max(natural - mid_debit, 0.0) * improvement * (1.0 - haircut)
+    return round(max(natural - gain, 0.0), 4)
 
 
 def _intrinsic(sig: SpreadSignal, und: float) -> float:
@@ -138,6 +173,7 @@ def run_backtest(store: ChainStore, cfg: BacktestConfig | None = None) -> Backte
     trades: list[Trade] = []
     curve: list[tuple[date, float]] = []
     realized = 0.0
+    rng = random.Random(cfg.fill_seed)     # only consumed when a fill can fail, so the default path is unchanged
     skipped: dict[str, int] = {}
     notes = list(store.notes)
     if cfg.scanner.pricing != "natural":
@@ -179,8 +215,15 @@ def run_backtest(store: ChainStore, cfg: BacktestConfig | None = None) -> Backte
                 continue
             pos.last_debit = _close_debit(short, long, cfg.exit_pricing, s.width)
             action = rm.evaluate_exit(pos.as_position(cfg.contracts), d)
-            if action in (ExitAction.TAKE_PROFIT, ExitAction.STOP_LOSS, ExitAction.CLOSE_DTE):
-                close(pos, d, pos.last_debit, action.value)
+            if action in (ExitAction.TAKE_PROFIT, ExitAction.STOP_LOSS, ExitAction.CLOSE_DTE, ExitAction.TIME_STOP):
+                debit, f = pos.last_debit, cfg.exit_fill_improvement
+                if f > 0 and action is not ExitAction.STOP_LOSS:
+                    if rng.random() >= _fill_probability(f, cfg.fill_prob_at_mid):
+                        bump("exit_not_filled")      # the limit did not trade today: still open, try again tomorrow
+                        still.append(pos)
+                        continue
+                    debit = _improved_debit(debit, short, long, f, cfg.adverse_selection_pct, s.width)
+                close(pos, d, debit, action.value)
             else:
                 still.append(pos)
         open_ = still
@@ -209,6 +252,22 @@ def run_backtest(store: ChainStore, cfg: BacktestConfig | None = None) -> Backte
                 if not rm.check_signal(sig, book, cfg.equity, cfg.contracts).approved:
                     bump("risk_limits")
                     continue
+                f = cfg.entry_fill_improvement
+                if f > 0:
+                    q_short = store.quote(d, symbol, sig.expiry, sig.spread_type.right, sig.short_strike)
+                    q_long = store.quote(d, symbol, sig.expiry, sig.spread_type.right, sig.long_strike)
+                    if q_short is None or q_long is None:
+                        bump("entry_quote_gap")
+                        continue
+                    if rng.random() >= _fill_probability(f, cfg.fill_prob_at_mid):
+                        bump("entry_not_filled")     # the signal is not traded today; it may re-appear tomorrow
+                        continue
+                    credit = _improved_credit(sig, q_short, q_long, f, cfg.adverse_selection_pct)
+                    sig = replace(sig, credit=credit, max_profit=round(credit * CONTRACT_MULTIPLIER, 2),
+                                  max_loss=round((sig.width - credit) * CONTRACT_MULTIPLIER, 2),
+                                  roc=round(credit / (sig.width - credit), 4),
+                                  breakeven=round(sig.short_strike - credit if sig.spread_type is SpreadType.BULL_PUT
+                                                  else sig.short_strike + credit, 2))
                 open_.append(_Open(sig, d, stats.iv_hv_ratio, sig.credit, sig.underlying_price))
                 held.add((symbol, sig.spread_type))
                 opened_today += 1

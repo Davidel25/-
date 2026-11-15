@@ -370,3 +370,54 @@ def test_cli_errors_exit_with_code_2(tmp_path, capsys):
     assert main(["--demo", "--demo-days", "30", "--earnings", str(tmp_path / "nope.csv")]) == 2
     err = capsys.readouterr().err
     assert err.count("ERROR") == 4
+
+
+# --- time-stop in the replay (off by default) ---
+def test_time_stop_closes_a_stale_position_only_when_enabled():
+    stale = day(D0 + timedelta(18), (1.05, 1.05), (0.20, 0.20))        # debit 0.85 = 11% profit, 51% of life, DTE 17
+    r_off, none = trade_after(stale)
+    assert none is None and r_off.still_open == 1
+    r_on, t = trade_after(stale, limits=RiskLimits(time_stop_fraction=0.5))
+    assert t.exit_reason == "TIME_STOP" and t.close_date == D0 + timedelta(18) and r_on.still_open == 0
+    early = day(D0 + timedelta(10), (1.05, 1.05), (0.20, 0.20))
+    assert trade_after(early, limits=RiskLimits(time_stop_fraction=0.5))[1] is None
+
+
+# --- execution model (off by default) ---
+def test_fill_improvement_defaults_are_a_no_op():
+    nxt = day(D0 + timedelta(1), (0.45, 0.65), (0.20, 0.30))
+    base = trade_after(nxt)[1]
+    zero = trade_after(nxt, entry_fill_improvement=0.0, exit_fill_improvement=0.0)[1]
+    assert (base.credit, base.exit_debit, base.net_pnl) == (zero.credit, zero.exit_debit, zero.net_pnl)
+
+
+def test_entry_fill_moves_toward_the_mid_and_adverse_selection_gives_part_back():
+    nxt = day(D0 + timedelta(1), (0.45, 0.65), (0.20, 0.30))           # entry: natural credit 0.96, mid credit 1.00
+    assert trade_after(nxt, entry_fill_improvement=0.5)[1].credit == pytest.approx(0.98)
+    assert trade_after(nxt, entry_fill_improvement=1.0)[1].credit == pytest.approx(1.00)
+    assert trade_after(nxt, entry_fill_improvement=1.0, adverse_selection_pct=0.5)[1].credit == pytest.approx(0.98)
+
+
+def test_exit_fill_moves_toward_the_mid_but_a_stop_always_crosses():
+    nxt = day(D0 + timedelta(1), (0.45, 0.65), (0.20, 0.30))           # close debit: natural 0.45, mid 0.30
+    assert trade_after(nxt, exit_fill_improvement=0.5)[1].exit_debit == pytest.approx(0.375)
+    stop = day(D0 + timedelta(1), (3.9, 3.9), (0.9, 0.9))
+    t = trade_after(stop, exit_fill_improvement=1.0, fill_prob_at_mid=0.0)[1]
+    assert t.exit_reason == "STOP_LOSS" and t.exit_debit == pytest.approx(3.0)
+
+
+def test_unfilled_limit_orders_skip_entries_and_retry_exits():
+    r = run(ENTRY, entry_fill_improvement=1.0, fill_prob_at_mid=0.0)
+    assert r.trades == [] and r.still_open == 0 and r.skipped["entry_not_filled"] >= 1
+    nxt = day(D0 + timedelta(1), (0.45, 0.65), (0.20, 0.30))
+    r2 = run(ENTRY + nxt, exit_fill_improvement=1.0, fill_prob_at_mid=0.0)
+    assert r2.trades == [] and r2.still_open == 1 and r2.skipped["exit_not_filled"] == 1
+
+
+def test_fill_model_is_deterministic_per_seed_and_validated():
+    a = run(ENTRY, entry_fill_improvement=0.5, fill_prob_at_mid=0.5, fill_seed=3)
+    b = run(ENTRY, entry_fill_improvement=0.5, fill_prob_at_mid=0.5, fill_seed=3)
+    assert (a.still_open, a.skipped) == (b.still_open, b.skipped)
+    for bad in ({"entry_fill_improvement": 1.5}, {"fill_prob_at_mid": -0.1}, {"adverse_selection_pct": 2.0}):
+        with pytest.raises(ValueError):
+            BacktestConfig(**bad)

@@ -137,6 +137,7 @@ class SpreadPosition:
     long_delta: float | None = None         # current |delta| of the long leg (for the vertical's net delta)
     short_iv: float | None = None           # current implied vol of the short / long leg (annualised, 0.20 = 20%);
     long_iv: float | None = None            # used by the what-if scenarios, None -> scenario is not computable
+    opened_on: date | None = None           # entry date; None = unknown (the broker feed omits it) -> time-stop skipped
 
     @property
     def key(self) -> str:
@@ -179,6 +180,15 @@ class SpreadPosition:
 
     def dte(self, today: date | None = None) -> int:
         return (self.expiry - (today or date.today())).days
+
+    def life_elapsed(self, today: date | None = None) -> float | None:
+        """Share of the trade's life used (0 = just opened, 1 = expiry); None if the entry date is unknown."""
+        if self.opened_on is None:
+            return None
+        life = (self.expiry - self.opened_on).days
+        if life <= 0:
+            return None
+        return ((today or date.today()) - self.opened_on).days / life
 
     def to_dict(self) -> dict:
         d = asdict(self)

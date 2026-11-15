@@ -49,6 +49,8 @@ class PositionReport:
             return "Stop hit: close the spread (loss >= stop multiple of credit)."
         if self.action is ExitAction.CLOSE_DTE:
             return "DTE cutoff: close or roll (for a credit) to avoid final-days gamma."
+        if self.action is ExitAction.TIME_STOP:
+            return "Time-stop: the trade has used its allotted share of life without enough profit; close it."
         if self.status is Status.ACTION:
             return "Act now: close, or roll out/away for a net credit only."
         if self.status is Status.REVIEW:
