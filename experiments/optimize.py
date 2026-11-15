@@ -60,13 +60,29 @@ def full_grid() -> list[dict]:
 
 
 def config_id(p: dict) -> str:
+    if "_name" in p:                       # a named variant of CURRENT (see ONE_AT_A_TIME)
+        return p["_name"]
     return f"d{p['delta']:.2f}|{p['floors']}|t{int(p['target'] * 100)}|s{p['stop']:g}|{p['window']}|x{p['exit_dte']}"
+
+
+# CURRENT with exactly one thing changed (or the "let winners run" bundle), to read each parameter's effect directly.
+ONE_AT_A_TIME = {
+    "CURRENT+stop2.5": {"limits": {"stop_loss_multiple": 2.5}},
+    "CURRENT+target70": {"limits": {"profit_target_pct": 0.70}},
+    "CURRENT+exit7": {"limits": {"close_at_dte": 7}},
+    "CURRENT+window45-60": {"scanner": {"min_dte": 45, "max_dte": 60, "preferred_dte": (50, 60)}},
+    "CURRENT+stop2.5+target70+exit7": {"limits": {"stop_loss_multiple": 2.5, "profit_target_pct": 0.70, "close_at_dte": 7}},
+}
 
 
 def build(p: dict | None) -> BacktestConfig:
     """``None`` = the CURRENT adopted configuration (ScannerConfig.disciplined() / RiskLimits.disciplined())."""
     if p is None:
         return BacktestConfig(equity=EQUITY, max_new_per_day=2)
+    if "_name" in p:
+        base = build(None)
+        return replace(base, scanner=replace(base.scanner, **p.get("scanner", {})),
+                       limits=replace(base.limits, **p.get("limits", {})))
     lo, hi, pref = WINDOWS[p["window"]]
     credit, roc = FLOORS[p["floors"]]
     scanner = ScannerConfig.disciplined(min_dte=lo, max_dte=hi, preferred_dte=pref, min_short_delta=p["delta"] - HALF,
@@ -235,7 +251,7 @@ def validate_job(args):
 
 def cmd_validate(path: str, out: str):
     fin = json.load(open(path))["finalists"]
-    params = [None, *fin.values()]
+    params = [None, *fin.values(), *({"_name": n, **ov} for n, ov in ONE_AT_A_TIME.items())]
     jobs = [(v, s, params) for v in PREMIA for s in VALID_SEEDS]
     rows = run_pool(jobs, validate_job, "validate")
     json.dump(rows, open(out, "w"))

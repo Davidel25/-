@@ -172,3 +172,16 @@ Paired NEW minus OLD: Sharpe **+0.39 +/- 0.16 (6/8 seeds)** at +10% and **+0.48 
   every signal is rejected by the risk gate (2,700 rejections per seed). At 2.5% ($500) the results equal the unconstrained run above.
   Real SPY/QQQ strikes are $1 apart, so narrower widths exist, but at 0.12-0.15 delta a 3-wide spread collects about 0.30, below the 0.45
   credit floor and the 12% ROC floor; the synthetic chains here only have $5 strikes, so that path is untested.
+
+## Exhaustive parameter sweep (`experiments/optimize.py`)
+
+1,440 configs (delta 0.10/0.12/0.15/0.18/0.20 x floors x target 50/60/65/70 x stop 1.5/2/2.5 x DTE window 30-45/45-60 x
+early exit 7/10/14/21) on 4 training paths x 2 premia, then 18 finalists re-run on 12 FRESH paths x 2 premia (paired vs CURRENT).
+Synthetic data only; friction (commission + natural fills) included.
+
+Validation (net, per 1 lot, $20k): best `d0.15|low|t70|s2.5|45-60|x7` Sharpe 0.20 (CURRENT 0.02), +$3.5/trade vs CURRENT,
+max DD $684 (CURRENT $731), ~23 trades/yr; paired Sharpe gain +0.18 +/- 0.07, better in 16/24 datasets.
+Runners-up: `d0.18|low|t70|s2|45-60|x7` 0.18; `CURRENT+window45-60` 0.17 (one-parameter change).
+Theme: let winners run (target 65-70%, stop 2.5x, exit 7 DTE, 45-60 DTE entry); delta 0.12-0.20 roughly interchangeable once
+floors are lowered; delta 0.10 trades too rarely. Caveats: winner's curse (winners' TRAINING Sharpe was negative), gains are ~2 SE,
+premium-dependent (+10% VRP: still ~0; +20%: ~0.4), all configs marginal. No defaults changed; re-test on real option history.
