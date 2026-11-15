@@ -55,6 +55,7 @@ def cfg(**kw):
     scanner = ScannerConfig(min_dte=30, max_dte=50, widths=(5.0,), min_credit=0.5, min_roc=0.1, min_open_interest=1,
                             max_bid_ask_pct=0.2, pricing="natural", top_n_per_symbol=5)
     kw.setdefault("equity", 50_000.0)                        # 2% = $1,000 per trade: a $404-risk spread passes
+    kw.setdefault("limits", RiskLimits())                    # 50% target: the hand-built P&L below assumes it
     return BacktestConfig(scanner=scanner, **kw)
 
 

@@ -42,7 +42,7 @@ class PositionReport:
         if self.action is ExitAction.SCALE_OUT:
             n, total = self.scale_out_contracts, self.position.contracts
             return (f"Scale out: close {n} of {total} contracts at the working limit and let the other "
-                    f"{total - n} run to the 50% target or the DTE exit. Remaining contracts keep full max loss.")
+                    f"{total - n} run to the profit target or the DTE exit. Remaining contracts keep full max loss.")
         if self.action is ExitAction.TAKE_PROFIT:
             return "Take profit: buy the spread back at the working limit."
         if self.action is ExitAction.STOP_LOSS:

@@ -142,3 +142,30 @@ parameters. Track the natural-to-mid distance and your actual fill versus mid in
 All of these are conditional on the premium. At +10% (about 1.6 vol points) no tested variant is profitable after costs with natural
 fills; at +20% the best (lower delta, 50-65% target) reaches Sharpe 0.3-0.4 and about +$75-90 a year per one-lot slot, with a
 standard error near $50-70. That is the realistic scale of the opportunity on a $20k account, before taxes.
+
+## Verification of the adopted configuration (SPY + QQQ synthetic, full disciplined filter set)
+
+Adopted: short delta 0.12-0.15, credit >= 0.45, ROC >= 12%, 65% profit target, SPY/QQQ only. Unlike the grids above,
+this run keeps the *other* live filters on (IV/HV >= 1.1, trend alignment, term slope, put skew, 5% / $0.05 leg spreads).
+8 seeds, 900 days, both symbols on the same paths, paired against the previous configuration (0.10-0.25 delta,
+0.60 / 20% floors, 50% target). Reproduce with `python experiments/verify_adopted.py verify.json`.
+
+| Premium | Config | Trades/yr | Win rate | Net / trade | Sharpe | Max DD | 5th pct trade | Annual $ per 1-lot slot |
+|---|---|---|---|---|---|---|---|---|
+| +10% | OLD | 35.6 | 71.3% | -1.05% | -0.30 | $1,440 | -$235 | -$148 +/- 123 |
+| +10% | **NEW** | 31.1 | 75.1% | +0.25% | +0.09 | $825 | -$162 | +$25 +/- 65 |
+| +20% | OLD | 38.7 | 71.6% | -0.25% | -0.09 | $1,173 | -$233 | -$45 +/- 136 |
+| +20% | **NEW** | 34.1 | 73.5% | +0.89% | +0.39 | $483 | -$146 | +$131 +/- 51 |
+
+Paired NEW minus OLD: Sharpe **+0.39 +/- 0.16 (6/8 seeds)** at +10% and **+0.48 +/- 0.22 (7/8)** at +20%; net per trade +1.3 and
++1.1 points of risk; drawdown -43% and -59%; stop-hit **+2.0 / +1.7 points (not lower)**; trades per year -13%.
+
+* **The new band finds trades with the new floors (31-34 a year) and none with the old ones** (0 trades, both premium levels).
+* The profit target's separate contribution is smaller than in the permissive-filter grid: moving the old rules to 65% changed Sharpe
+  by +0.02 +/- 0.14 (3/8) at +10% and +0.28 +/- 0.09 (7/8) at +20%.
+* **At +10% premium the new configuration is not distinguishable from zero** (Sharpe +0.09 +/- 0.17, about +$25 +/- $65 a year); it
+  is better than the old one, not proven profitable.
+* **A $20k account with the default 2% per-trade risk cap trades nothing:** a 5-wide spread at these credits risks about $443 (cap $400);
+  every signal is rejected by the risk gate (2,700 rejections per seed). At 2.5% ($500) the results equal the unconstrained run above.
+  Real SPY/QQQ strikes are $1 apart, so narrower widths exist, but at 0.12-0.15 delta a 3-wide spread collects about 0.30, below the 0.45
+  credit floor and the 12% ROC floor; the synthetic chains here only have $5 strikes, so that path is untested.

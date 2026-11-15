@@ -4,12 +4,14 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+from src.risk.manager import DISCIPLINED_PROFIT_TARGET, RiskLimits
 from src.risk.portfolio import DEFAULT_BETAS, parse_betas
 
 # Gateway API ports on a bare-metal install. The gnzsnz/ib-gateway Docker image
 # exposes 4003/4004 *inside* its network and forwards them to 4001/4002 on the host.
 IB_PORT_LIVE = 4001
 IB_PORT_PAPER = 4002
+CORE_UNIVERSE = ("SPY", "QQQ")   # liquid index ETFs: the only symbols scanned for new signals by default
 
 
 def _bool(name: str, default: bool) -> bool:
@@ -34,7 +36,10 @@ class Settings:
     ib_port: int = IB_PORT_PAPER
     ib_client_id: int = 1
     ib_market_data_type: int = 3    # 1 live, 2 frozen, 3 delayed, 4 delayed-frozen
-    watchlist: list[str] = field(default_factory=lambda: ["SPY", "QQQ", "IWM"])
+    # Core universe: liquid index ETFs only. Single stocks were excluded after the simulations showed commissions,
+    # wide quotes and gap risk dominating (experiments/REPORT.md). ScanService enforces the allow-list itself.
+    watchlist: list[str] = field(default_factory=lambda: list(CORE_UNIVERSE))
+    universe_allowlist: tuple[str, ...] = CORE_UNIVERSE
     scan_interval_sec: int = 300
     scan_enabled: bool = True
     account_equity: float = 50_000.0
@@ -52,6 +57,8 @@ class Settings:
     allowed_weekdays: tuple[int, ...] | None = None  # entry-day filter, 0 = Monday (off by default: validate first)
     betas: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_BETAS))  # beta to SPY by symbol
     max_net_beta_delta_pct: float = 1.0  # cap on net beta-weighted delta as a fraction of equity
+    profit_target_pct: float = DISCIPLINED_PROFIT_TARGET  # take profit at this share of the credit
+    max_risk_per_trade_pct: float = 0.02  # max loss of one new trade as a fraction of equity
     scale_out_profit_pct: float = 0.0    # 0 = off; 0.30 / 0.40 recommends closing half of a >= 2 contract position
     earnings_provider: str = "file"      # "file" (manual calendar only) | "finnhub" (automated feed layered under it)
     earnings_api_key: str = field(default="", repr=False)
@@ -61,6 +68,19 @@ class Settings:
     earnings_max_stale_hours: float = 72.0  # a cached date older than this is treated as UNKNOWN
     earnings_file: str = ""         # JSON earnings calendar (see src/risk/earnings.py); empty -> ETFs only
     entry_deltas_file: str = ""     # JSON journal {position key: entry |delta|} for the delta alert
+
+    def risk_limits(self) -> RiskLimits:
+        """The risk/exit rules the system runs with, built from these settings (single source for service and CLIs)."""
+        if not 0 < self.profit_target_pct <= 1:
+            raise ValueError("PROFIT_TARGET_PCT must be in (0, 1]")
+        if not 0 < self.max_risk_per_trade_pct <= 0.10:
+            raise ValueError("MAX_RISK_PER_TRADE_PCT must be in (0, 0.10]")
+        if self.scale_out_profit_pct and self.scale_out_profit_pct >= self.profit_target_pct:
+            raise ValueError("SCALE_OUT_PROFIT_PCT must be below PROFIT_TARGET_PCT (the target fires first)")
+        return RiskLimits(profit_target_pct=self.profit_target_pct,
+                          max_risk_per_trade_pct=self.max_risk_per_trade_pct,
+                          max_net_beta_delta_pct=self.max_net_beta_delta_pct,
+                          scale_out_profit_pct=self.scale_out_profit_pct or None)
 
     def quote_age_limit(self) -> float:
         """Maximum acceptable quote age in seconds. Delayed data (type 3/4) is ~15 min old by design."""
@@ -75,14 +95,17 @@ class Settings:
             raise ValueError("TRADING_MODE must be 'paper' or 'live'")
         default_port = IB_PORT_LIVE if mode == "live" else IB_PORT_PAPER
         broker = os.getenv("BROKER", "mock").lower()
-        return cls(
+        settings = cls(
             broker=broker,
             trading_mode=mode,
             ib_host=os.getenv("IB_HOST", "127.0.0.1"),
             ib_port=int(os.getenv("IB_PORT", default_port)),
             ib_client_id=int(os.getenv("IB_CLIENT_ID", "1")),
             ib_market_data_type=int(os.getenv("IB_MARKET_DATA_TYPE", "3")),
-            watchlist=_list("WATCHLIST", "SPY,QQQ,IWM"),
+            watchlist=_list("WATCHLIST", ",".join(CORE_UNIVERSE)),
+            universe_allowlist=tuple(_list("UNIVERSE_ALLOWLIST", ",".join(CORE_UNIVERSE))),
+            profit_target_pct=float(os.getenv("PROFIT_TARGET_PCT", str(DISCIPLINED_PROFIT_TARGET))),
+            max_risk_per_trade_pct=float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.02")),
             scan_interval_sec=int(os.getenv("SCAN_INTERVAL_SEC", "300")),
             scan_enabled=_bool("SCAN_ENABLED", True),
             account_equity=float(os.getenv("ACCOUNT_EQUITY", "50000")),
@@ -109,3 +132,5 @@ class Settings:
             earnings_file=os.getenv("EARNINGS_FILE", ""),
             entry_deltas_file=os.getenv("ENTRY_DELTAS_FILE", ""),
         )
+        settings.risk_limits()  # validate PROFIT_TARGET_PCT / MAX_RISK_PER_TRADE_PCT / SCALE_OUT_PROFIT_PCT now
+        return settings

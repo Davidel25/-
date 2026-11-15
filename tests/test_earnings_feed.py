@@ -24,6 +24,8 @@ from src.risk.earnings_feed import (
 from src.service import ScanService
 from src.strategies.credit_spreads import ScannerConfig
 
+STOCKS_OK = ("SPY", "QQQ", "AAPL", "MSFT")   # single stocks are outside the default universe: opt in explicitly
+
 NOW = datetime(2026, 11, 14, 12, 0, tzinfo=UTC)
 TODAY = NOW.date()
 KEY = "sk-secret-key-123456"
@@ -306,6 +308,7 @@ REAL = date.today()
 
 def service(plan, symbols=("AAPL",), **kw):
     settings = Settings(broker="mock", watchlist=list(symbols), scan_enabled=False, earnings_provider="finnhub",
+                        universe_allowlist=STOCKS_OK,
                         earnings_api_key=KEY)
     fetcher = FakeFetcher(plan)
     prov = build_earnings_provider(settings, fetcher)
@@ -348,7 +351,7 @@ def test_a_crashing_provider_never_breaks_the_scan():
         def refresh(self, symbols):
             raise RuntimeError("kaboom " + KEY)
 
-    settings = Settings(broker="mock", watchlist=["AAPL"], scan_enabled=False)
+    settings = Settings(broker="mock", watchlist=["AAPL"], scan_enabled=False, universe_allowlist=STOCKS_OK)
     svc = ScanService(settings, MockBroker(today=REAL), AlertDispatcher([]), earnings=Boom(),
                       scanner_cfg=ScannerConfig(top_n_per_symbol=3))
     asyncio.run(svc.run_once())

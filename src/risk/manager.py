@@ -1,4 +1,4 @@
-"""Risk rules: pre-trade exposure limits and post-trade exit rules (50% profit target)."""
+"""Risk rules: pre-trade exposure limits and post-trade exit rules (profit target, 2x-credit stop, DTE exit)."""
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -9,6 +9,12 @@ from src.models import PositionLeg, SpreadPosition, SpreadSignal, SpreadType
 from src.risk.earnings import EarningsCheck, EarningsInfo, classify_earnings
 from src.risk.portfolio import PortfolioSnapshot
 
+# The profit target the system is configured to use (``Settings.profit_target_pct``, ``RiskLimits.disciplined``).
+# Chosen from the strategy-adjustment simulations: 65% beat 50% on Sharpe at 0.12-0.15 delta in 8/8 paired seeds at
+# +10% and +20% implied-vol premium, while a 30% target was worse (see experiments/REPORT.md). Synthetic evidence only:
+# re-test on real option history. ``RiskLimits()`` itself keeps the neutral library default of 50%.
+DISCIPLINED_PROFIT_TARGET = 0.65
+
 
 @dataclass
 class RiskLimits:
@@ -16,7 +22,7 @@ class RiskLimits:
     max_total_risk_pct: float = 0.20       # all open spreads' max loss, of equity
     max_open_positions: int = 10
     max_positions_per_symbol: int = 2
-    profit_target_pct: float = 0.50        # close at 50% of credit captured
+    profit_target_pct: float = 0.50        # close at this share of the credit captured (library default)
     stop_loss_multiple: float = 2.0        # close when loss >= 2x credit received
     close_at_dte: int = 14                 # gamma-risk exit
     delta_alert_multiple: float = 2.0      # warn when short |delta| >= 2x its entry value
@@ -31,6 +37,12 @@ class RiskLimits:
     scale_out_profit_pct: float | None = None
     scale_out_fraction: float = 0.5        # share of contracts to close at the scale-out trigger
 
+    @classmethod
+    def disciplined(cls, **overrides) -> RiskLimits:
+        """The configured exit rules: take profit at 65% of the credit (instead of the library default 50%), stop at a
+        2x-credit loss, close at DTE <= 14. Individual fields can be overridden."""
+        return cls(**{"profit_target_pct": DISCIPLINED_PROFIT_TARGET, **overrides})
+
 
 @dataclass
 class RiskDecision:
@@ -43,7 +55,7 @@ class ExitAction(StrEnum):
     TAKE_PROFIT = "TAKE_PROFIT"
     STOP_LOSS = "STOP_LOSS"
     CLOSE_DTE = "CLOSE_DTE"
-    SCALE_OUT = "SCALE_OUT"  # advisory: close part of the position, let the rest run to the 50% target / DTE exit
+    SCALE_OUT = "SCALE_OUT"  # advisory: close part of the position, let the rest run to the profit target / DTE exit
 
 
 class AlertType(StrEnum):

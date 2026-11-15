@@ -16,6 +16,8 @@ from src.service import ScanService
 from src.storage.trade_log import TradeLog
 from src.strategies.credit_spreads import ScannerConfig
 
+STOCKS_OK = ("SPY", "QQQ", "AAPL", "MSFT")   # single stocks are outside the default universe: opt in explicitly
+
 TODAY = date.today()
 FIRST_FRIDAY = TODAY + timedelta(days=(4 - TODAY.weekday()) % 7 or 7)
 EXPIRY = FIRST_FRIDAY + timedelta(weeks=4)                         # a Friday the mock chain lists, ~28-34 DTE
@@ -36,7 +38,8 @@ def legs(qty=1, short_mark=0.95, long_mark=0.45, symbol="SPY", short=480, long=4
 
 def make(watchlist=("SPY",), broker=None, settings=None, **kw):
     rec = Rec()
-    settings = settings or Settings(broker="mock", watchlist=list(watchlist), scan_enabled=False)
+    settings = settings or Settings(broker="mock", watchlist=list(watchlist), scan_enabled=False,
+                                    universe_allowlist=STOCKS_OK)
     broker = broker or MockBroker(today=TODAY)
     kw.setdefault("scanner_cfg", ScannerConfig(top_n_per_symbol=3))
     return ScanService(settings, broker, AlertDispatcher([rec]), **kw), rec
@@ -69,7 +72,8 @@ def test_in_window_earnings_block_and_clear_earnings_allow():
 
 
 def test_earnings_gate_can_be_disabled_and_etfs_are_clear():
-    s = Settings(broker="mock", watchlist=["AAPL"], scan_enabled=False, require_earnings_clear=False)
+    s = Settings(broker="mock", watchlist=["AAPL"], scan_enabled=False, require_earnings_clear=False,
+                 universe_allowlist=STOCKS_OK)
     svc, _ = make(settings=s)
     scan(svc)
     assert svc.state.signals                                         # gate off -> unknown earnings tolerated

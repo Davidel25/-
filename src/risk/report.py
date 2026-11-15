@@ -8,8 +8,8 @@ What it does
        ``readonly=True``; or the mock broker) and pulls the option positions, spot prices and option chains.
     2. Pairs the legs into vertical credit spreads and enriches each with the underlying price and the short
        leg's current delta (broker model delta, Black-Scholes fallback).
-    3. Runs every rule in :class:`RiskManager`: 50% take-profit, 2x-credit stop, DTE cutoff, delta alert,
-       strike-proximity alert and the earnings-window check.
+    3. Runs every rule in :class:`RiskManager`: take-profit (configured target), 2x-credit stop, DTE cutoff,
+       delta alert, strike-proximity alert and the earnings-window check.
     4. Prints one status block per position and exits non-zero if anything needs attention.
 
 Safety: this module never imports or calls any order API. It only reads and recommends. The IBKR *MCP* tools
@@ -133,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(f"CONFIG ERROR: {exc}", file=sys.stderr)
         return 2
-    return asyncio.run(run(broker, earnings=earnings, entry_deltas=deltas))
+    return asyncio.run(run(broker, RiskManager(settings.risk_limits()), earnings=earnings, entry_deltas=deltas))
 
 
 if __name__ == "__main__":

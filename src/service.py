@@ -20,7 +20,7 @@ from src.models import OptionQuote, SpreadPosition, SpreadSignal, SpreadType
 from src.risk.earnings import EarningsProvider
 from src.risk.earnings_feed import build_earnings_provider
 from src.risk.evaluation import PositionReport, Status, enrich_positions, evaluate_position
-from src.risk.manager import ExitAction, RiskLimits, RiskManager, pair_legs
+from src.risk.manager import ExitAction, RiskManager, pair_legs
 from src.risk.portfolio import PortfolioSnapshot, build_snapshot, signal_dollar_delta
 from src.risk.report import load_entry_deltas
 from src.risk.scenarios import run_presets
@@ -65,9 +65,7 @@ class ScanService:
         self.earnings: EarningsProvider = earnings or build_earnings_provider(settings)
         self._journal = entry_deltas  # manual overrides; None -> read settings.entry_deltas_file each cycle
         self.trade_log = trade_log or TradeLog(settings.trade_db_path or ":memory:", settings.commission_per_contract)
-        self.risk = risk or RiskManager(RiskLimits(
-            scale_out_profit_pct=settings.scale_out_profit_pct or None,
-            max_net_beta_delta_pct=settings.max_net_beta_delta_pct))
+        self.risk = risk or RiskManager(settings.risk_limits())
         self.betas = dict(settings.betas)
         self._snapshot: PortfolioSnapshot | None = None
         self.cfg = scanner_cfg or (ScannerConfig.disciplined() if settings.disciplined_scanner else ScannerConfig())
@@ -91,6 +89,15 @@ class ScanService:
                 log.warning("earnings refresh failed (%s)", type(exc).__name__)
         health = getattr(self.earnings, "health", None)
         self.state.earnings_feed = health() if health else {}
+
+    def scan_universe(self) -> tuple[list[str], list[str]]:
+        """Split the watchlist into symbols that may be scanned for NEW signals and those outside the core universe.
+        Single stocks are excluded on purpose (friction and gap risk); open positions are still monitored."""
+        allowed = {s.upper() for s in self.settings.universe_allowlist}
+        scan, rejected = [], []
+        for sym in dict.fromkeys(s.upper() for s in self.settings.watchlist):
+            (scan if sym in allowed else rejected).append(sym)
+        return scan, rejected
 
     def earnings_table(self) -> dict:
         """What the earnings gate currently believes, per symbol (watchlist + open positions)."""
@@ -123,14 +130,17 @@ class ScanService:
             await self._ensure_connected()
             equity = await self.broker.get_account_equity() or self.settings.account_equity
             self.state.equity = equity
-            await self._refresh_earnings(self.settings.watchlist)
+            scan_symbols, outside = self.scan_universe()
+            await self._refresh_earnings(scan_symbols)
             positions = await self.check_positions(equity)
 
             approved: list[SpreadSignal] = []
-            rejected, skipped, blocked = 0, [], []
+            rejected, blocked = 0, []
+            skipped = [{"symbol": s, "reason": "outside the core universe (index ETFs only: single stocks excluded "
+                                                "for friction and gap risk)"} for s in outside]
             today = now.date()
             closed_today = schedule_gate(self.cfg, today)
-            for symbol in self.settings.watchlist:
+            for symbol in scan_symbols:
                 if closed_today:
                     skipped.append({"symbol": symbol, "reason": "; ".join(closed_today)})
                     continue

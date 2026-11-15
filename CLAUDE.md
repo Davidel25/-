@@ -57,10 +57,16 @@ Dashboard API: `/api/health`, `/api/status`, `/api/signals`, `/api/positions`, `
 ## Strategy definitions
 - ROC = `credit / (width - credit)` = max profit / max loss. POP ~ `1 - |short delta|`.
 - Breakeven: bull put `short - credit`; bear call `short + credit`.
-- Defaults (`ScannerConfig`): DTE 25-50, |short delta| 0.10-0.25, widths 1/2/5, credit >= 0.15, ROC >= 15%,
+- Library defaults (`ScannerConfig()`, permissive): DTE 25-50, |short delta| 0.10-0.25, widths 1/2/5, credit >= 0.15, ROC >= 15%,
   max risk $1000/lot, OI >= 100, bid/ask <= 15% of mid. `pricing="natural"` uses short bid - long ask (conservative).
+- **Configured strategy** (`ScannerConfig.disciplined()` + `Settings.risk_limits()`): short |delta| **0.12-0.15**, credit >= **0.45**,
+  ROC >= **12%**, profit target **65%** (library `RiskLimits()` default stays 50%), universe **SPY/QQQ only**. Chosen from the synthetic
+  strategy-adjustment simulations (`experiments/REPORT.md`) and re-verified end to end (`experiments/verify_adopted.py`): synthetic
+  evidence only, re-test on real option history.
 - Risk (`RiskLimits`): <=2% equity per trade, <=20% total open risk, <=10 positions, <=2 per symbol;
-  exits: **take profit at 50% of credit**, stop at loss >= 2x credit, close at DTE <= 14.
+  exits: take profit at the configured target (65%), stop at loss >= 2x credit, close at DTE <= 14.
+- **$20k account caveat:** at 0.12-0.15 delta a 5-wide spread collects ~0.57 and risks ~$443, above the 2% cap ($400), so the
+  per-trade risk gate blocks every signal. Set `MAX_RISK_PER_TRADE_PCT=0.025` ($500) or use a larger account.
 
 ## IB Gateway notes
 - API ports on a bare-metal Gateway: **4001 live, 4002 paper** (TWS uses 7496/7497).
@@ -88,10 +94,14 @@ Dashboard API: `/api/health`, `/api/status`, `/api/signals`, `/api/positions`, `
    gnzsnz/ib-gateway-docker docs for that tag.
 
 ## Edge filters and guards (all read-only)
-- `ScannerConfig.disciplined()` bundles: credit >= 0.60, ROC >= 20% natural, bid/ask <= 5% and <= $0.05 per leg, IV/HV >= 1.1,
+- `ScannerConfig.disciplined()` bundles: short delta 0.12-0.15, credit >= 0.45, ROC >= 12% natural (the old 0.60 / 20% floors return
+  ZERO trades in this band), bid/ask <= 5% and <= $0.05 per leg, IV/HV >= 1.1,
   trend alignment (Bull Put above SMA50, Bear Call below), term-structure slope >= +1%, 25d put skew <= 10 vol pts (Bull Puts),
   DTE 30-50 with 35-45 ranked first. `allowed_weekdays` (entry days) is off by default: the filter exists, validate it with
   `GET /api/breakdown?by=weekday|dte_bucket` before enabling. Missing data always fails closed.
+- Universe: `WATCHLIST` and `UNIVERSE_ALLOWLIST` default to SPY,QQQ. `ScanService` only scans allow-listed symbols for NEW signals
+  (others are skipped and reported on the dashboard); open positions in any symbol are still monitored. Single stocks were excluded
+  after the simulations showed commissions, wide quotes and gap risk dominating.
 - `ScanService` blocks signals with unknown / in-window earnings, skips scans outside market hours and on stale quotes, captures
   `entry_short_delta` automatically (signal delta > first-scan delta; the manual journal overrides), and logs to SQLite.
   Closed-trade P&L is an ESTIMATE (last seen debit, modelled commissions); a position must be missing for 2 scans to count as closed.

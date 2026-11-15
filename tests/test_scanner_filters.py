@@ -120,7 +120,8 @@ def test_data_window_limits_signals_even_with_wider_chain(broker, today, hi, exp
 
 def test_disciplined_preset_bundles_all_rules_and_accepts_overrides():
     d = ScannerConfig.disciplined()
-    assert (d.min_credit, d.min_roc, d.pricing, d.max_bid_ask_pct) == (0.60, 0.20, "natural", 0.05)
+    assert (d.min_short_delta, d.max_short_delta) == (0.12, 0.15)               # lowered from 0.10-0.25 / 0.20-0.25
+    assert (d.min_credit, d.min_roc, d.pricing, d.max_bid_ask_pct) == (0.45, 0.12, "natural", 0.05)
     assert d.min_iv_hv_ratio == 1.1 and d.require_trend_alignment and d.min_term_slope == 0.01
     assert d.max_put_skew == 0.10 and d.preferred_dte == (35, 45) and (d.min_dte, d.max_dte) == (30, 50)
     assert d.allowed_weekdays is None                                           # unvalidated: opt in explicitly

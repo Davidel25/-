@@ -40,6 +40,7 @@ def test_dispatch_cooldown_and_failure_isolation():
 
 def make_service(positions=None, **kw):
     rec = Recorder()
+    kw.setdefault("profit_target_pct", 0.5)          # these tests are written around the 50% rule
     settings = Settings(broker="mock", watchlist=["SPY"], scan_enabled=False, **kw)
     broker = MockBroker(today=TODAY, positions=positions or [])
     return ScanService(settings, broker, AlertDispatcher([rec]),

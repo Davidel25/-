@@ -44,10 +44,16 @@ class ScannerConfig:
     @classmethod
     def disciplined(cls, **overrides) -> ScannerConfig:
         """Preset implementing the friction/edge rules from the strategy review. Individual fields can be
-        overridden, e.g. ``ScannerConfig.disciplined(max_bid_ask_abs=0.02)``."""
-        base = dict(min_dte=30, max_dte=50, preferred_dte=(35, 45), min_credit=0.60, min_roc=0.20, pricing="natural",
-                    max_bid_ask_pct=0.05, max_bid_ask_abs=0.05, min_iv_hv_ratio=1.1, require_trend_alignment=True,
-                    min_term_slope=0.01, max_put_skew=0.10)
+        overridden, e.g. ``ScannerConfig.disciplined(max_bid_ask_abs=0.02)``.
+
+        Short delta 0.12-0.15 (was 0.10-0.25 / 0.20-0.25) came out of the synthetic strategy-adjustment simulations
+        (experiments/REPORT.md): consistently better Sharpe and smaller losses/drawdowns than 0.20-0.25. That band
+        collects less premium (about 11% of width versus 20%), so the credit/ROC floors drop with it: the former
+        0.60 / 20% floors return NO trades at 0.12-0.15 delta on 5-wide spreads. Synthetic evidence: re-test on real
+        option history before relying on it."""
+        base = dict(min_dte=30, max_dte=50, preferred_dte=(35, 45), min_short_delta=0.12, max_short_delta=0.15,
+                    min_credit=0.45, min_roc=0.12, pricing="natural", max_bid_ask_pct=0.05, max_bid_ask_abs=0.05,
+                    min_iv_hv_ratio=1.1, require_trend_alignment=True, min_term_slope=0.01, max_put_skew=0.10)
         return cls(**{**base, **overrides})
 
 

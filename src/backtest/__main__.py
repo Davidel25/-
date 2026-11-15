@@ -29,6 +29,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--demo-vrp", type=float, default=0.10, help="synthetic IV premium over realized vol")
     ap.add_argument("--demo-seed", type=int, default=1)
     ap.add_argument("--preset", choices=["disciplined", "base"], default="disciplined")
+    ap.add_argument("--profit-target", type=float, default=None,
+                    help="override the profit target as a fraction of the credit (default: the configured 0.65)")
     ap.add_argument("--equity", type=float, default=20_000.0)
     ap.add_argument("--commission", type=float, default=0.65, help="$ per contract per leg fill")
     ap.add_argument("--slippage", type=float, default=0.0, help="extra $ per share on each leg fill")
@@ -50,7 +52,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     scanner = ScannerConfig.disciplined() if args.preset == "disciplined" else ScannerConfig(pricing="natural")
-    cfg = BacktestConfig(scanner=scanner, limits=RiskLimits(), equity=args.equity,
+    limits = RiskLimits.disciplined(**({"profit_target_pct": args.profit_target} if args.profit_target else {}))
+    cfg = BacktestConfig(scanner=scanner, limits=limits, equity=args.equity,
                          commission_per_contract=args.commission, slippage_per_leg=args.slippage,
                          exit_pricing=args.exit_pricing, max_new_per_day=args.max_new_per_day, earnings=earnings)
     result = run_backtest(store, cfg)

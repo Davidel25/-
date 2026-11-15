@@ -1,8 +1,8 @@
 """Replay historical option-chain snapshots through the REAL scanner and risk rules.
 
 For each trading day, in order:
-  1. Open positions are repriced from that day's quotes and run through ``RiskManager.evaluate_exit`` (50% target,
-     2x-credit stop, 14-DTE exit, exactly the live rules). Closed at the day's natural cost-to-close.
+  1. Open positions are repriced from that day's quotes and run through ``RiskManager.evaluate_exit`` (configured
+     profit target, 2x-credit stop, 14-DTE exit: exactly the live rules). Closed at the day's natural cost-to-close.
   2. New entries: the scanner (``scan_all`` with the live edge filters and underlying stats computed ONLY from data up
      to that day), the earnings gate, and ``RiskManager.check_signal`` decide what is opened, at that day's prices.
 
@@ -30,7 +30,7 @@ from src.strategies.credit_spreads import ScannerConfig, rank_key, scan_all
 @dataclass
 class BacktestConfig:
     scanner: ScannerConfig = field(default_factory=ScannerConfig.disciplined)
-    limits: RiskLimits = field(default_factory=RiskLimits)
+    limits: RiskLimits = field(default_factory=RiskLimits.disciplined)   # 65% target, 2x stop, DTE <= 14
     equity: float = 20_000.0
     commission_per_contract: float = 0.65
     slippage_per_leg: float = 0.0           # extra $ per share on each of the 4 leg fills (open + close)
