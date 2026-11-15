@@ -115,6 +115,18 @@ Dashboard API: `/api/health`, `/api/status`, `/api/signals`, `/api/positions`, `
 - Optional scale-out (`SCALE_OUT_PROFIT_PCT`, needs >= 2 contracts): advisory only, lowers variance, does not raise expectancy,
   and is NOT risk-free (the remaining contracts keep their full max loss).
 
+## Backtesting (`src/backtest/`)
+`python -m src.backtest --data chains.csv [--earnings earnings.csv] [--oos-from YYYY-MM-DD] [--out report.md] [--json out.json]`
+replays DAILY end-of-day option-chain snapshots through the REAL scanner (`ScannerConfig.disciplined()` by default), earnings gate,
+`RiskManager.check_signal` and the live exit rules (50% / 2x stop / 14 DTE), with commissions and natural-fill pricing. Input columns:
+`date,symbol,expiry,strike,right,bid,ask,underlying_price[,delta][,iv][,open_interest][,volume]` (see `src/backtest/data.py`; option
+history must be bought, e.g. CBOE DataShop / ORATS / OptionMetrics / Polygon). Statistics use a CLUSTER bootstrap (whole entry-months)
+and the verdict is INCONCLUSIVE below 100 trades / 12 months. `--demo` runs on SYNTHETIC Black-Scholes chains: it proves the pipeline
+and says nothing about real edge. Calibration on synthetic data (12 runs, ~150 trades over 41 months each): 0 false "positive edge"
+verdicts at zero premium; with a 15% implied-vol premium most runs were still "not distinguishable from zero" because friction eats
+the premium and ~150 trades cannot resolve a ~$5/trade effect - expect to need many symbols/years of data. Limits: EOD fills, no early
+assignment, hindsight earnings dates, overlapping/correlated trades, filters tuned in-sample (use `--oos-from`).
+
 ## Known gaps / next steps
 - Dashboard live state is in-memory; trade history / P&L snapshots persist in SQLite (`TRADE_DB_PATH`). Fills are not read from the broker, so P&L is estimated.
 - No dashboard authentication, and `pair_legs` only recognises simple verticals (no iron condors / rolled legs).
